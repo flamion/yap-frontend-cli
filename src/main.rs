@@ -5,7 +5,7 @@ use regex::Regex;
 use std::ops::Not;
 use reqwest::blocking;
 use reqwest::StatusCode;
-use std::io::{Write, Read};
+use std::io::Write;
 use std::fs;
 use std::fs::File;
 use serde_json;
@@ -15,11 +15,14 @@ use serde::Deserialize;
 //use std::thread;
 //use std::sync::mpsc;
 
+//TODO rewrite login so it takes email and password as arguments
 
+//TOKEN_FILE location
+static TOKEN_FILE: &'static str = "token.json";
 
 struct User {
     http_client: blocking::Client,
-    token: String,
+    token: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -32,6 +35,12 @@ enum RegisterInvalid {
     InvalidUsername,
     InvalidEmail,
     InvalidPassword,
+}
+
+enum TokenLoadError {
+    TokenExpired,
+    FileNotFound,
+    FileNotReadable,
 }
 
 fn exit(root: &mut Cursive) {
@@ -108,45 +117,58 @@ fn login_page(root: &mut Cursive) {
 }
 
 fn login(root: &mut Cursive) {
-    //token_file location
-    let token_file = "token.json";
 
     //Get HTTP client if it exists else create one and store it for later use
     let http_client=  root.take_user_data::<User>().unwrap_or(
         User {
             http_client: blocking::Client::new(),
-            token: "".to_string(),
+            //token: "".to_string(),
+            token: None,
         }).http_client;
 
+    /*let email = root.find_name::<EditView>("EMAIL_LOGIN")
+        .unwrap_or(
+            root.find_name::<EditView>("EMAIL_REGISTER")
+                .expect("couldn't find view by name")
+        )
+        .get_content();*/
+
+    let email = root.find_name::<EditView>("EMAIL_LOGIN")
+        .unwrap_or_else(
+            || root.find_name::<EditView>("EMAIL_REGISTER")
+                .expect("couldn't find view by name"))
+        .get_content();
+
+    let password = root.find_name::<EditView>("PASSWORD_LOGIN")
+        .unwrap_or_else(
+            || root.find_name::<EditView>("PASSWORD_REGISTER")
+                .expect("couldn't find view by name"))
+        .get_content();
+
+    //let mut file = File::create("reached");
+    //file.unwrap().write_all(password.as_bytes()).unwrap();
 
     //Send request to backend to obtain a token
     match http_client.post("https://backend.yap.dragoncave.dev/security/token")
-        .header("Content-Type", "application/json")
+        .header("content-type", "application/json")
         .body(format!(
             "{{\"emailAddress\":\"{}\",\"password\":\"{}\"}}",
-            root.find_name::<EditView>("EMAIL_LOGIN")
-                .unwrap_or(
-                    root.find_name::<EditView>("EMAIL_REGISTER")
-                        .expect("couldn't find view by name")
-                )
-                .get_content(),
-            root.find_name::<EditView>("PASSWORD_LOGIN")
-                .unwrap_or(
-                    root.find_name::<EditView>("PASSWORD_REGISTER")
-                        .expect("couldn't find view by name")
-                )
-                .get_content()
+            email,
+            password
         ))
         .send() { // <- Some error isn't properly caught, to try type invalid info into login form and observe that is still executes the successful branch
 
         Ok(request) => {
+            //let mut file = File::create("reached");
+            //file.unwrap().write_all(request.status().as_str().as_bytes()).unwrap();
+
             if request.status().is_success() {
-                fs::remove_file(token_file);
+                if let Ok(_) = fs::remove_file(TOKEN_FILE) {};
                 //Store the client and token
                 root.set_user_data(User {
                     http_client,
-                    token: request.text()
-                        .expect("request didn't return a token"),
+                    token: Some(request.text()
+                        .expect("request didn't return a token")),
                 });
 
                 //Write the token to a file if REMEMBER_ME is checked
@@ -154,12 +176,12 @@ fn login(root: &mut Cursive) {
                     "REMEMBER_ME_LOGIN"
                 ) {
                     if state.is_checked().eq(&true) {
-                        if Path::exists(token_file.as_ref()).not() {
-                            fs::remove_file(token_file);
+                        if Path::exists(TOKEN_FILE.as_ref()).not() {
+                            fs::remove_file(TOKEN_FILE).unwrap();
                         }
 
-                        let mut file = File::create(token_file).expect(
-                            "token_file couldn't be created"
+                        let mut file = File::create(TOKEN_FILE).expect(
+                            "TOKEN_FILE couldn't be created"
                         );
                         file.write_all(
                             serde_json::to_string_pretty(
@@ -169,18 +191,20 @@ fn login(root: &mut Cursive) {
                                         .get_content()
                                         .to_string(),
                                     token: root.user_data::<User>()
-                                        .expect("token not in user")
+                                        .expect("no user data set")
                                         .token
+                                        .as_ref()
+                                        .unwrap()
                                         .to_string(),
                                 })
                                 .unwrap()
                                 .as_bytes()
-                        ).expect("couldn't write to file");
+                        ).expect("couldn't write to token file");
                     }
                 } else {
                     notify_popup(root, "No success!", "file not created");
                 }
-                notify_popup(root, "Success!", "Successfully logged inn."); // <- should eventually be replaced with main_screen(root)
+                main_screen(root);
             } else {
                 if request.status() == StatusCode::UNAUTHORIZED {
                     notify_popup(
@@ -212,9 +236,9 @@ fn login(root: &mut Cursive) {
 }
 
 /*fn remember_me_login(root: &mut Cursive) {
-    if Path::exists(token_file.as_ref()) { //error is between here ----------------------------------------------------
+    if Path::exists(TOKEN_FILE.as_ref()) { //error is between here ----------------------------------------------------
         let mut json = String::new();
-        File::open(token_file)
+        File::open(TOKEN_FILE)
             .unwrap()
             .read_to_string(&mut json);
         let json = serde_json::from_str::<TokenFile>(&*json).unwrap();
@@ -232,7 +256,7 @@ fn login(root: &mut Cursive) {
                 root.with_user_data::<_, User, _>(|user| user.token = token.clone());
                 notify_popup(root, "Success!", "Could import token, noice!"); // <- should eventually be replaced with main_screen(root)
             } else {
-                fs::remove_file(token_file);
+                fs::remove_file(TOKEN_FILE);
                 root.add_layer(
                     Dialog::text(
                         "your token is probably invalid, you should try to reauthenticate"
@@ -250,7 +274,8 @@ fn login(root: &mut Cursive) {
 }*/
 
 fn main_screen(root: &mut Cursive) {
-
+    root.pop_layer();
+    notify_popup(root, "eeeeeemptyness", "hmm, doesn't seem to be ready yet.")
 }
 
 fn register_page(root: &mut Cursive) {
@@ -322,7 +347,7 @@ fn register_page(root: &mut Cursive) {
             )
         )
         .button("Back", |root| welcome_page(root))
-        .button("Register", |root| {
+        .button("Register and login", |root| {
                 match check_register(root) {
                     Ok(_) => register(root),
                     Err(RegisterInvalid::InvalidUsername) =>
@@ -439,7 +464,7 @@ fn register(root: &mut Cursive) {
     let http_client = blocking::Client::new();
 
     match http_client.post("https://backend.yap.dragoncave.dev/user")
-        .header("Content-Type", "application/json")
+        .header("content-type", "application/json")
         .body(format!(
             "{{\"username\":\"{}\",\"emailAddress\":\"{}\",\"password\":\"{}\"}}",
             root.find_name::<EditView>("USERNAME_REGISTER")
@@ -456,7 +481,8 @@ fn register(root: &mut Cursive) {
         Ok(_) => {
             root.set_user_data(User {
                 http_client,
-                token: "".to_string(),
+                //token: "".to_string(),
+                token: None,
             });
             notify_popup(root, "Success!", "Successfully created user");
         },
@@ -559,6 +585,42 @@ fn welcome_page(root: &mut Cursive) {
         .button("Register", register_page));
 }
 
+fn check_token(token: &str) -> bool {
+    let client = reqwest::blocking::Client::new();
+
+    if let Ok(response) = client.get("https://backend.yap.dragoncave.dev/security/token/checkValid")
+        .header("token", token)
+        .send() {
+        if let Ok(status) = response.text().unwrap().parse::<bool>() {
+            return status;
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+}
+
+fn load_token() -> Result<TokenFile, TokenLoadError> {
+    if Path::new(TOKEN_FILE).exists().not() {
+        return Err(TokenLoadError::FileNotFound);
+    }
+    if let Ok(token_content) = fs::read_to_string(TOKEN_FILE) {
+        if let Ok(token_struct) = serde_json::from_str::<TokenFile>(&*token_content) {
+            if check_token(&token_struct.token) {
+                return Ok(token_struct);
+            } else {
+                return Err(TokenLoadError::TokenExpired);
+            }
+        } else {
+            return Err(TokenLoadError::FileNotReadable);
+        }
+    } else {
+        return Err(TokenLoadError::FileNotReadable);
+    }
+}
+
+
 fn main() {
     let theme_path = include_str!("../theme.toml");
 
@@ -573,8 +635,32 @@ fn main() {
 
     root.add_global_callback('\\', Cursive::toggle_debug_console);
 
+
+
     //display the welcome page
-    welcome_page(&mut root);
+    if let Ok(token_comb) = load_token() {
+        root.add_layer(Dialog::text(
+            format!("Is {} you?", token_comb.user_mail))
+            .button("yes", move |mut root| {
+
+                let http_client = blocking::Client::new();
+
+                root.set_user_data(
+                    User {
+                        token: Some(token_comb.token.clone()),
+                        http_client
+                    }
+                );
+                main_screen(&mut root);
+            })
+            .button("no", |root| {
+                fs::remove_file(TOKEN_FILE).unwrap();
+                login_page(root);
+            })
+        );
+    } else {
+        welcome_page(&mut root);
+    }
 
     //start the event loop
     root.run();
