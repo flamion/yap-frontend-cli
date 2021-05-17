@@ -23,13 +23,13 @@ use xdg;
 //TODO rewrite login so it takes email and password as arguments
 
 //TOKEN_FILE location
-static TOKEN_FILE: &'static str = "~/.config/yap-frontend-cli/token.json";
+//static TOKEN_FILE: &'static str = "~/.config/yap-frontend-cli/token.json";
 
 
 struct GlobalData {
     http_client: blocking::Client,
     token: Option<String>,
-    //config_home: xdg::BaseDirectories
+    config_home: xdg::BaseDirectories
 }
 
 #[derive(Serialize, Deserialize)]
@@ -117,14 +117,21 @@ fn login_page(root: &mut Cursive) {
 }
 
 fn login(root: &mut Cursive) {
+    let token_file = &root.user_data::<GlobalData>()
+        .unwrap()
+        .config_home;
 
     //Get HTTP client if it exists else create one and store it for later use
-    let http_client = root.take_user_data::<GlobalData>().unwrap_or(
+    /*let http_client = root.take_user_data::<GlobalData>().unwrap_or(
         GlobalData {
             http_client: blocking::Client::new(),
             //token: "".to_string(),
             token: None,
-        }).http_client;
+        }).http_client;*/
+
+    let &mut http_client = &root.user_data::<GlobalData>()
+        .unwrap()
+        .http_client;
 
     let email = root.find_name::<EditView>("EMAIL_LOGIN")
         .unwrap_or_else(
@@ -153,12 +160,10 @@ fn login(root: &mut Cursive) {
 
         Ok(request) => { // <- If the status code is an Error it will still return an Ok()
             if request.status().is_success() {
-                if let Ok(_) = fs::remove_file(TOKEN_FILE) {};
-                //Store the client and token
-                root.set_user_data(GlobalData {
-                    http_client,
-                    token: Some(request.text()
-                        .expect("request didn't return a token")),
+                if let Ok(_) = fs::remove_file(token_file) {};
+
+                root.with_user_data(|mut data: GlobalData| {
+                    data.token = Some(request.text().unwrap());
                 });
 
                 //Write the token to a file if REMEMBER_ME is checked
@@ -166,7 +171,9 @@ fn login(root: &mut Cursive) {
                     "REMEMBER_ME_LOGIN"
                 ) {
                     if state.is_checked().eq(&true) {
-                        if Path::exists(TOKEN_FILE.as_ref()).not() {
+                        if Path::exists(
+                            token_file.find_data_file("token.json").unwrap().as_path()
+                        ).not() {
                             fs::remove_file(TOKEN_FILE).unwrap();
                         }
 
@@ -485,6 +492,13 @@ fn main() {
     root.add_global_callback('\\', Cursive::toggle_debug_console);
 
 
+    root.set_user_data(GlobalData {
+        token: None,
+        http_client: blocking::Client::new(),
+        config_home: xdg::BaseDirectories::with_prefix("yap").unwrap(),
+    });
+
+    root.user_data::<GlobalData>().unwrap().config_home.place_data_file("token.json");
 
     //display the welcome page
     if let Ok(token_comb) = load_token() {
@@ -494,12 +508,19 @@ fn main() {
 
                 let http_client = blocking::Client::new();
 
-                root.set_user_data(
+                /*root.set_user_data(
                     GlobalData {
                         token: Some(token_comb.token.clone()),
-                        http_client
+                        http_client,
+
                     }
-                );
+                );*/
+
+                root.with_user_data(| mut data: GlobalData | {
+                    //maybe use .clone()
+                    data.token = Some(token_comb.token);
+                });
+
                 main_screen(&mut root);
             })
             .button("no", |root| {
