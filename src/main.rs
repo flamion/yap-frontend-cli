@@ -7,7 +7,7 @@ use reqwest::blocking;
 use reqwest::StatusCode;
 use std::io::Write;
 use std::fs;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use serde_json;
 use std::path::Path;
 use serde::Serialize;
@@ -22,8 +22,8 @@ use xdg;
 //TODO put the request parts in its own call_backend function
 //TODO rewrite login so it takes email and password as arguments
 
-//TOKEN_FILE location
-//static TOKEN_FILE: &'static str = "~/.config/yap-frontend-cli/token.json";
+//TOKEN_FILE name
+static TOKEN_FILE: &'static str = "token.json";
 
 
 struct GlobalData {
@@ -117,21 +117,6 @@ fn login_page(root: &mut Cursive) {
 }
 
 fn login(root: &mut Cursive) {
-    let token_file = &root.user_data::<GlobalData>()
-        .unwrap()
-        .config_home;
-
-    //Get HTTP client if it exists else create one and store it for later use
-    /*let http_client = root.take_user_data::<GlobalData>().unwrap_or(
-        GlobalData {
-            http_client: blocking::Client::new(),
-            //token: "".to_string(),
-            token: None,
-        }).http_client;*/
-
-    let &mut http_client = &root.user_data::<GlobalData>()
-        .unwrap()
-        .http_client;
 
     let email = root.find_name::<EditView>("EMAIL_LOGIN")
         .unwrap_or_else(
@@ -145,11 +130,25 @@ fn login(root: &mut Cursive) {
                 .expect("couldn't find view by name"))
         .get_content();
 
-    //let mut file = File::create("reached");
+    //let config_dir = &root.user_data::<GlobalData>()
+    //    .unwrap()
+    //    .config_home;
+
+    //Get HTTP client if it exists else create one and store it for later use
+    /*let http_client = root.take_user_data::<GlobalData>().unwrap_or(
+        GlobalData {
+            http_client: blocking::Client::new(),
+            //token: "".to_string(),
+            token: None,
+        }).http_client;*/
+
+
     //file.unwrap().write_all(password.as_bytes()).unwrap();
+    //let mut filee = File::create(root.user_data::<GlobalData>().unwrap().config_home.find_data_file(TOKEN_FILE).expect("file not found")).expect("file wasn't created");
+    //let mut file = File::create("reached");
 
     //Send request to backend to obtain a token
-    match http_client.post("https://backend.yap.dragoncave.dev/security/token")
+    match root.user_data::<GlobalData>().unwrap().http_client.post("https://backend.yap.dragoncave.dev/security/token")
         .header("content-type", "application/json")
         .body(format!(
             "{{\"emailAddress\":\"{}\",\"password\":\"{}\"}}",
@@ -160,9 +159,9 @@ fn login(root: &mut Cursive) {
 
         Ok(request) => { // <- If the status code is an Error it will still return an Ok()
             if request.status().is_success() {
-                if let Ok(_) = fs::remove_file(token_file) {};
+                remove_file(root, TOKEN_FILE);
 
-                root.with_user_data(|mut data: GlobalData| {
+                root.with_user_data(|data: &mut GlobalData | {
                     data.token = Some(request.text().unwrap());
                 });
 
@@ -171,22 +170,13 @@ fn login(root: &mut Cursive) {
                     "REMEMBER_ME_LOGIN"
                 ) {
                     if state.is_checked().eq(&true) {
-                        if Path::exists(
-                            token_file.find_data_file("token.json").unwrap().as_path()
-                        ).not() {
-                            fs::remove_file(TOKEN_FILE).unwrap();
-                        }
 
-                        let mut file = File::create(TOKEN_FILE).expect(
-                            "TOKEN_FILE couldn't be created"
-                        );
-                        file.write_all(
+                        create_file(root, TOKEN_FILE);
+
+                        get_file(root, TOKEN_FILE).write_all(
                             serde_json::to_string_pretty(
                                 &TokenFile {
-                                    user_mail: root.find_name::<EditView>("EMAIL_LOGIN")
-                                        .expect("couldn't find view by name")
-                                        .get_content()
-                                        .to_string(),
+                                    user_mail: email.to_string(),
                                     token: root.user_data::<GlobalData>()
                                         .expect("no user data set")
                                         .token
@@ -410,11 +400,6 @@ fn register(root: &mut Cursive) {
         ))
         .send() {
         Ok(_) => {
-            root.set_user_data(GlobalData {
-                http_client,
-                //token: "".to_string(),
-                token: None,
-            });
             notify_popup(root, "Success!", "Successfully created user");
         },
         Err(error) => {
@@ -427,6 +412,46 @@ fn register(root: &mut Cursive) {
         },
     }
     login(root);
+}
+
+fn get_file(root: &mut Cursive, file: &str) -> File {
+    OpenOptions::new()
+        .write(true)
+        .open(
+            root.user_data::<GlobalData>()
+                .expect("no config in user data")
+                .config_home
+                .find_config_file(file)
+                .expect("file not found")
+        ).expect("file couldn't be opened")
+}
+
+fn remove_file(root: &mut Cursive, file: &str) {
+    if let Some(file_path) = &root.user_data::<GlobalData>()
+        .unwrap()
+        .config_home
+        .find_config_file(file) {
+
+        fs::remove_file(file_path)
+            .expect(
+                &*format!(
+                    "couldn't remove {} file",
+                    file_path.to_str().unwrap()
+                )
+            );
+    }
+}
+
+fn create_file(root: &mut Cursive, file: &str) {
+    match root.user_data::<GlobalData>()
+        .unwrap()
+        .config_home
+        .place_config_file(file) {
+        Ok(file_path) => if Path::exists(file_path.as_ref()).not() {
+            File::create(file_path).expect("couldn't create file");
+        }
+        Err(error) => panic!("{}", error.to_string()),
+    }
 }
 
 fn welcome_page(root: &mut Cursive) {
@@ -498,7 +523,8 @@ fn main() {
         config_home: xdg::BaseDirectories::with_prefix("yap").unwrap(),
     });
 
-    root.user_data::<GlobalData>().unwrap().config_home.place_data_file("token.json");
+    //root.user_data::<GlobalData>().unwrap().config_home.place_data_file(TOKEN_FILE).expect("token file not placed");
+    root.with_user_data(|data: &mut GlobalData| data.config_home.place_data_file(TOKEN_FILE).expect("couldn't place token file"));
 
     //display the welcome page
     if let Ok(token_comb) = load_token() {
@@ -506,7 +532,7 @@ fn main() {
             format!("Is {} you?", token_comb.user_mail))
             .button("yes", move |mut root| {
 
-                let http_client = blocking::Client::new();
+                //let http_client = blocking::Client::new();
 
                 /*root.set_user_data(
                     GlobalData {
@@ -516,15 +542,19 @@ fn main() {
                     }
                 );*/
 
-                root.with_user_data(| mut data: GlobalData | {
-                    //maybe use .clone()
-                    data.token = Some(token_comb.token);
+                root.with_user_data(|data: &mut GlobalData| {
+                    data.token = Some(token_comb.token.clone());
                 });
 
                 main_screen(&mut root);
             })
             .button("no", |root| {
-                fs::remove_file(TOKEN_FILE).unwrap();
+                fs::remove_file(&root.user_data::<GlobalData>()
+                    .unwrap()
+                    .config_home
+                    .find_data_file(TOKEN_FILE)
+                    .unwrap())
+                    .unwrap();
                 login_page(root);
             })
         );
