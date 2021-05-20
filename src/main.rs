@@ -17,8 +17,7 @@ use xdg;
 //use std::sync::mpsc;
 
 
-//TODO inizlize http_client in main and get rid of the token option
-//TODO make the config file path use the XDG Base directories
+//TODO get rid of the token option
 //TODO put the request parts in its own call_backend function
 //TODO rewrite login so it takes email and password as arguments
 
@@ -149,7 +148,7 @@ fn login(root: &mut Cursive) {
     //let mut file = File::create("reached");
 
     //Send request to backend to obtain a token
-    match root.user_data::<GlobalData>().unwrap().http_client.post("https://backend.yap.dragoncave.dev/security/token")
+    match root.user_data::<GlobalData>().expect("no user data set").http_client.post("https://backend.yap.dragoncave.dev/security/token")
         .header("content-type", "application/json")
         .body(format!(
             "{{\"emailAddress\":\"{}\",\"password\":\"{}\"}}",
@@ -387,9 +386,7 @@ fn check_register(root: &mut Cursive) -> Result<(), RegisterInvalid> {
 }
 
 fn register(root: &mut Cursive) {
-    let http_client = blocking::Client::new();
-
-    match http_client.post("https://backend.yap.dragoncave.dev/user")
+    match root.user_data::<GlobalData>().expect("no user data set").http_client.post("https://backend.yap.dragoncave.dev/user")
         .header("content-type", "application/json")
         .body(format!(
             "{{\"username\":\"{}\",\"emailAddress\":\"{}\",\"password\":\"{}\"}}",
@@ -421,7 +418,7 @@ fn register(root: &mut Cursive) {
 
 fn get_path(root: &mut Cursive, file: &str) -> Result<PathBuf, std::io::ErrorKind> {
     if let Some(path) = &root.user_data::<GlobalData>()
-        .expect("no user data")
+        .expect("no user data set")
         .config_home
         .find_config_file(file) {
         return Ok(path.clone());
@@ -444,7 +441,7 @@ fn get_file(root: &mut Cursive, file: &str) -> Result<File, std::io::ErrorKind> 
 //TODO add Result<(), Error>
 fn remove_file(root: &mut Cursive, file: &str) {
     if let Some(file_path) = &root.user_data::<GlobalData>()
-        .unwrap()
+        .expect("no user data set")
         .config_home
         .find_config_file(file) {
 
@@ -461,7 +458,7 @@ fn remove_file(root: &mut Cursive, file: &str) {
 //TODO add Result<(), Error>
 fn create_file(root: &mut Cursive, file: &str) {
     match root.user_data::<GlobalData>()
-        .unwrap()
+        .expect("no user data set")
         .config_home
         .place_config_file(file) {
         Ok(file_path) => if Path::exists(file_path.as_ref()).not() {
@@ -484,10 +481,8 @@ fn welcome_page(root: &mut Cursive) {
 }
 
 //TODO use the client from user_data
-fn check_token(token: &str) -> bool {
-    let client = reqwest::blocking::Client::new();
-
-    if let Ok(response) = client.get("https://backend.yap.dragoncave.dev/security/token/checkValid")
+fn check_token(root: &mut Cursive, token: &str) -> bool {
+    if let Ok(response) = root.user_data::<GlobalData>().expect("no user data set").http_client.get("https://backend.yap.dragoncave.dev/security/token/checkValid")
         .header("token", token)
         .send() {
         if let Ok(status) = response.text().unwrap().parse::<bool>() {
@@ -505,7 +500,7 @@ fn load_token(root: &mut Cursive) -> Result<TokenFile, TokenLoadError> {
     if let Ok(path) = get_path(root, TOKEN_FILE) {
         if let Ok(token_content) = fs::read_to_string(path) {
             if let Ok(token_struct) = serde_json::from_str::<TokenFile>(&*token_content) {
-                if check_token(&token_struct.token) {
+                if check_token(root, &token_struct.token) {
                     return Ok(token_struct);
                 } else {
                     return Err(TokenLoadError::TokenExpired);
