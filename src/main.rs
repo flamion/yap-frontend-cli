@@ -9,7 +9,7 @@ use std::io::Write;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use serde_json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde::Deserialize;
 use xdg;
@@ -50,10 +50,11 @@ enum TokenLoadError {
     FileNotReadable,
 }
 
-enum RequestError {
+//TODO implement the call_backend() function
+/*enum RequestError {
     StatusError,
     RequestFailed,
-}
+}*/
 
 fn exit(root: &mut Cursive) {
     root.quit();
@@ -173,20 +174,24 @@ fn login(root: &mut Cursive) {
 
                         create_file(root, TOKEN_FILE);
 
-                        get_file(root, TOKEN_FILE).write_all(
-                            serde_json::to_string_pretty(
-                                &TokenFile {
-                                    user_mail: email.to_string(),
-                                    token: root.user_data::<GlobalData>()
-                                        .expect("no user data set")
-                                        .token
-                                        .as_ref()
-                                        .unwrap()
-                                        .to_string(),
-                                })
-                                .unwrap()
-                                .as_bytes()
-                        ).expect("couldn't write to token file");
+                        if let Ok(mut file) = get_file(root, TOKEN_FILE) {
+                            file.write_all(
+                                serde_json::to_string_pretty(
+                                    &TokenFile {
+                                        user_mail: email.to_string(),
+                                        token: root.user_data::<GlobalData>()
+                                            .expect("no user data set")
+                                            .token
+                                            .as_ref()
+                                            .unwrap()
+                                            .to_string(),
+                                    })
+                                    .unwrap()
+                                    .as_bytes()
+                            ).expect("couldn't write to token file");
+                        } else {
+                            notify_popup(root, "Remember Me", "Remember Me didn't work :(")
+                        }
                     }
                 } else {
                     notify_popup(root, "No success!", "file not created");
@@ -414,18 +419,29 @@ fn register(root: &mut Cursive) {
     login(root);
 }
 
-fn get_file(root: &mut Cursive, file: &str) -> File {
-    OpenOptions::new()
-        .write(true)
-        .open(
-            root.user_data::<GlobalData>()
-                .expect("no config in user data")
-                .config_home
-                .find_config_file(file)
-                .expect("file not found")
-        ).expect("file couldn't be opened")
+fn get_path(root: &mut Cursive, file: &str) -> Result<PathBuf, std::io::ErrorKind> {
+    if let Some(path) = &root.user_data::<GlobalData>()
+        .expect("no user data")
+        .config_home
+        .find_config_file(file) {
+        return Ok(path.clone());
+    } else {
+        return Err(std::io::ErrorKind::NotFound);
+    }
 }
 
+fn get_file(root: &mut Cursive, file: &str) -> Result<File, std::io::ErrorKind> {
+    if let Ok(path) = get_path(root, file) {
+        return Ok(OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("file couldn't be opened"));
+    } else {
+        return Err(std::io::ErrorKind::NotFound);
+    }
+}
+
+//TODO add Result<(), Error>
 fn remove_file(root: &mut Cursive, file: &str) {
     if let Some(file_path) = &root.user_data::<GlobalData>()
         .unwrap()
@@ -442,6 +458,7 @@ fn remove_file(root: &mut Cursive, file: &str) {
     }
 }
 
+//TODO add Result<(), Error>
 fn create_file(root: &mut Cursive, file: &str) {
     match root.user_data::<GlobalData>()
         .unwrap()
@@ -466,6 +483,7 @@ fn welcome_page(root: &mut Cursive) {
         .button("Register", register_page));
 }
 
+//TODO use the client from user_data
 fn check_token(token: &str) -> bool {
     let client = reqwest::blocking::Client::new();
 
@@ -482,22 +500,24 @@ fn check_token(token: &str) -> bool {
     }
 }
 
-fn load_token() -> Result<TokenFile, TokenLoadError> {
-    if Path::new(TOKEN_FILE).exists().not() {
-        return Err(TokenLoadError::FileNotFound);
-    }
-    if let Ok(token_content) = fs::read_to_string(TOKEN_FILE) {
-        if let Ok(token_struct) = serde_json::from_str::<TokenFile>(&*token_content) {
-            if check_token(&token_struct.token) {
-                return Ok(token_struct);
+//TODO change error type to a generic one?
+fn load_token(root: &mut Cursive) -> Result<TokenFile, TokenLoadError> {
+    if let Ok(path) = get_path(root, TOKEN_FILE) {
+        if let Ok(token_content) = fs::read_to_string(path) {
+            if let Ok(token_struct) = serde_json::from_str::<TokenFile>(&*token_content) {
+                if check_token(&token_struct.token) {
+                    return Ok(token_struct);
+                } else {
+                    return Err(TokenLoadError::TokenExpired);
+                }
             } else {
-                return Err(TokenLoadError::TokenExpired);
+                return Err(TokenLoadError::FileNotReadable);
             }
         } else {
             return Err(TokenLoadError::FileNotReadable);
         }
     } else {
-        return Err(TokenLoadError::FileNotReadable);
+        return Err(TokenLoadError::FileNotFound);
     }
 }
 
@@ -527,7 +547,8 @@ fn main() {
     root.with_user_data(|data: &mut GlobalData| data.config_home.place_data_file(TOKEN_FILE).expect("couldn't place token file"));
 
     //display the welcome page
-    if let Ok(token_comb) = load_token() {
+    //TODO integrate this mess into the login function, which should by then use the credentials as parameters
+    if let Ok(token_comb) = load_token(&mut root) {
         root.add_layer(Dialog::text(
             format!("Is {} you?", token_comb.user_mail))
             .button("yes", move |mut root| {
@@ -549,12 +570,7 @@ fn main() {
                 main_screen(&mut root);
             })
             .button("no", |root| {
-                fs::remove_file(&root.user_data::<GlobalData>()
-                    .unwrap()
-                    .config_home
-                    .find_data_file(TOKEN_FILE)
-                    .unwrap())
-                    .unwrap();
+                remove_file(root, TOKEN_FILE);
                 login_page(root);
             })
         );
