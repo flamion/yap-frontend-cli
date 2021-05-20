@@ -523,19 +523,13 @@ fn load_token(root: &mut Cursive) -> Result<TokenFile, TokenLoadError> {
 
 
 fn main() {
-    let theme_path = include_str!("../theme.toml");
-
     //initialize objects
     let mut root = cursive::default();
-
-    //load theme file if present
-    if let Ok(_) = root.load_toml(theme_path) {}
 
     //bind exit to 'q' to be able to exit at any time
     root.add_global_callback('q', exit);
 
     root.add_global_callback('\\', Cursive::toggle_debug_console);
-
 
     root.set_user_data(GlobalData {
         token: None,
@@ -543,8 +537,13 @@ fn main() {
         config_home: xdg::BaseDirectories::with_prefix("yap").unwrap(),
     });
 
+    //load theme file if present
+    if let Ok(file) = get_path(&mut root, "theme.toml") {
+        root.load_theme_file(file).unwrap();
+    }
+
     //root.user_data::<GlobalData>().unwrap().config_home.place_data_file(TOKEN_FILE).expect("token file not placed");
-    root.with_user_data(|data: &mut GlobalData| data.config_home.place_data_file(TOKEN_FILE).expect("couldn't place token file"));
+    //root.with_user_data(|data: &mut GlobalData| data.config_home.place_data_file(TOKEN_FILE).expect("couldn't place token file"));
 
     //display the welcome page
     //TODO integrate this mess into the login function, which should by then use the credentials as parameters
