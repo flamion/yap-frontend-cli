@@ -197,11 +197,11 @@ fn login(root: &mut Cursive) {
                 }
                 main_screen(root);
             } else {
-                if request.status() == StatusCode::UNAUTHORIZED {
+                if request.status() == StatusCode::FORBIDDEN {
                     notify_popup(
                         root,
                         "Wrong credentials!",
-                        "Ether your mail or password is wrong."
+                        "Either your mail or password is wrong."
                     );
                 } else {
                     notify_popup(
@@ -413,6 +413,7 @@ fn register(root: &mut Cursive) {
             }
         },
     }
+    root.pop_layer();
     login(root);
 }
 
