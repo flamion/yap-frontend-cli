@@ -1,16 +1,16 @@
 use cursive;
 use cursive::align::HAlign;
-use cursive::Cursive;
+use cursive::{Cursive, View};
 use cursive::event::Key;
 use cursive::theme::ColorStyle;
 use cursive::view::{Nameable, Resizable, SizeConstraint};
 use cursive::views::{
-    Dialog, EditView, LinearLayout, TextView, Checkbox,
+    Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView,
     SelectView, ScrollView, ResizedView, Layer, StackView, Panel, Button
 };
 use regex::Regex;
 use std::ops::Not;
-use reqwest::blocking;
+use reqwest::{blocking, Error};
 use reqwest::StatusCode;
 use std::io::Write;
 use std::fs;
@@ -29,9 +29,11 @@ use chrono;
 
 
 //TODO rewrite login so it takes email and password as arguments
+//TODO write a function which takes enums and matches them to strings as the cursive-name replacement
 
 //TOKEN_FILE name
 static TOKEN_FILE: &'static str = "token.json";
+static BASE_URL: &'static str = "https://backend.yap.dragoncave.dev";
 
 #[derive(Serialize, Deserialize)]
 #[allow(non_snake_case)]
@@ -89,7 +91,7 @@ struct Entry {
 
 enum EntryItem {
     Entry(Entry),
-    Add,
+    Add(i64),
 }
 
 enum BoardItem {
@@ -98,7 +100,8 @@ enum BoardItem {
 }
 
 enum BackendError {
-    BoardDeleted, //204
+    Incomplete, //400
+    Deleted, //204
     TokenInvalid, //401
     NoAccess, //403
 }
@@ -160,6 +163,16 @@ fn set_entry_nav_callback(siv: &mut Cursive) {
     );
 }
 
+fn set_tab_nav(siv: &mut Cursive, state: bool) {
+    if state {
+        siv.add_global_callback(Key::Left, |siv| select_tab(siv, &TABS[0]));
+        siv.add_global_callback(Key::Right, |siv| select_tab(siv, &TABS[1]));
+    } else {
+        siv.clear_global_callbacks(Key::Left);
+        siv.clear_global_callbacks(Key::Right);
+    }
+}
+
 fn select_tab(siv: &mut Cursive, tab_name: &Tab) {
     for tab in &TABS {
         let mut tab_indicator = siv.find_name::<Layer<TextView>>(tab.indicator)
@@ -201,23 +214,11 @@ fn load_boards_to_view(siv: &mut Cursive) {
                     Ok(board_obj) => {
                         load_to_board_view(siv, board_obj);
                     },
-                    Err(error) => {
-                        match error {
-                            BackendError::BoardDeleted => notify_popup(siv, "board deleted", "board doesn't exist anymore"),
-                            BackendError::TokenInvalid => notify_popup(siv, "session invalid", "please re-login"),
-                            BackendError::NoAccess => panic!("received no access: 403"),
-                        }
-                    },
+                    Err(error) => error_handler(siv, error),
                 }
             }
         },
-        Err(error) => {
-            match error {
-                BackendError::BoardDeleted => notify_popup(siv, "board deleted", "board doesn't exist anymore"),
-                BackendError::TokenInvalid => notify_popup(siv, "session invalid", "please re-login"),
-                BackendError::NoAccess => panic!("received no access: 403"),
-            }
-        },
+        Err(error) => error_handler(siv, error),
     }
 }
 
@@ -229,24 +230,45 @@ fn load_entries_to_view(siv: &mut Cursive, board_id: i64) {
                     Ok(entry_obj) => {
                         load_to_entry_view(siv, entry_obj);
                     },
-                    Err(error) => {
-                        match error {
-                            BackendError::BoardDeleted => notify_popup(siv, "entry deleted", "entry doesn't exist anymore"),
-                            BackendError::TokenInvalid => notify_popup(siv, "session invalid", "please re-login"),
-                            BackendError::NoAccess => panic!("received no access: 403"),
-                        }
-                    },
+                    Err(error) => error_handler(siv, error),
                 }
             }
         },
-        Err(error) => {
-            match error {
-                BackendError::BoardDeleted => notify_popup(siv, "entry deleted", "entry doesn't exist anymore"),
-                BackendError::TokenInvalid => notify_popup(siv, "session invalid", "please re-login"),
-                BackendError::NoAccess => panic!("received no access: 403"),
-            }
-        },
+        Err(error) => error_handler(siv, error),
     }
+
+    siv.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
+        .expect("view: 'ENTRY_SELECTION' not found")
+        .add_item("<add new entry>", EntryItem::Add(board_id));
+}
+
+fn create_board(siv: &mut Cursive, name: &str) -> Result<i64, BackendError> {
+    let token = &siv.user_data::<GlobalData>().expect("no token")
+        .token
+        .clone()
+        .expect("clone failed");
+
+    match siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client
+        .post(format!("{}/boards", BASE_URL))
+        .header("token", token)
+        .json::<BoardAPI>(&BoardAPI {
+            boardID: 0,
+            name: name.to_string(),
+            createDate: 0,
+            creatorID: 0
+        })
+        .send() {
+
+        Ok(response) => if response.status().is_success() {
+            return Ok(response.json::<i64>()
+                .expect("didn't recieve an i64"));
+        } else {
+            return Err(error_converter(response.status()));
+        },
+        Err(_) => panic!("{}", verbose_panic(error)),
+    };
 }
 
 fn on_submit_board(siv: &mut Cursive, item: &BoardItem) {
@@ -255,7 +277,52 @@ fn on_submit_board(siv: &mut Cursive, item: &BoardItem) {
             load_entries_to_view(siv, board.board_id);
             switch_stack(siv, "BOARD_STACK", "ENTRY_LAYER");
         },
-        BoardItem::Add => (),
+        BoardItem::Add => {
+            siv.add_layer(
+                Dialog::new()
+                    .title("Create new board")
+                    .content(
+                        LinearLayout::vertical()
+                            .child(
+                                TextView::new("\nHow should it be called?\n")
+                                    .h_align(HAlign::Center)
+                                    .fixed_height(3)
+                            )
+                            .child(
+                                EditView::new()
+                                    .fixed_width(24)
+                                    .with_name("BOARD_CREATE_NAME")
+                            )
+                    )
+                    .button("cancel", |s| {
+                        s.pop_layer();
+                        set_tab_nav(s, true);
+                    }
+                    )
+                    .button(
+                        "create", |s| {
+                            let name = &s.find_name::<ResizedView<EditView>>("BOARD_CREATE_NAME")
+                                .expect("view: 'BOARD_CREATE_NAME' not found")
+                                .get_inner_mut()
+                                .get_content()
+                                .clone();
+
+                            match create_board(s, name) {
+                                Ok(board_id) => {
+                                    match get_board_from_id(s, board_id) {
+                                        Ok(board) => load_to_board_view(s, board),
+                                        Err(error) => error_handler(s, error),
+                                    }
+                                },
+                                Err(error) => error_handler(s, error),
+                            };
+                            s.pop_layer();
+                            set_tab_nav(s, true);
+                        },
+                    )
+            );
+            set_tab_nav(siv, false);
+        },
     }
 }
 
@@ -264,7 +331,7 @@ fn on_submit_entry(siv: &mut Cursive, item: &EntryItem) {
         EntryItem::Entry(entry) => {
             notify_popup(siv, "edit entry", "edit this entry");
         },
-        EntryItem::Add => (),
+        EntryItem::Add(_) => (),
     }
 }
 
@@ -275,10 +342,10 @@ fn on_select_entry(siv: &mut Cursive, item: &EntryItem) {
                 .expect("view: 'ENTRY_DESCRIPTION' not found")
                 .set_content(entry.description.clone());
         },
-        EntryItem::Add => {
+        EntryItem::Add(_) => {
             siv.find_name::<TextView>("ENTRY_DESCRIPTION")
                 .expect("view: 'ENTRY_DESCRIPTION' not found")
-                .set_content("");
+                .set_content("With this button you are able to create new entries.");
         },
     }
 }
@@ -325,11 +392,9 @@ fn board_api_to_board(board_api: BoardAPI) -> Board {
 }
 
 fn clear_entry_view(siv: &mut Cursive) {
-    let mut entry_view = siv.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
-        .expect("view: 'ENTRY_SELECTION' not found");
-
-    entry_view.clear();
-    entry_view.add_item("<add new entry>", EntryItem::Add);
+    siv.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
+        .expect("view: 'ENTRY_SELECTION' not found")
+        .clear();
 }
 
 fn load_to_entry_view(siv: &mut Cursive, entry: Entry) {
@@ -354,14 +419,50 @@ fn load_to_board_view(siv: &mut Cursive, board: Board) {
         .insert_item(0, board.name.clone(), BoardItem::Board(board));
 }
 
-fn error_handler(status_code: reqwest::StatusCode) -> BackendError {
+fn error_handler(siv: &mut Cursive, error: BackendError) {
+    match error {
+        BackendError::Incomplete => notify_popup(
+            siv,
+            "BAD_REQUEST",
+            "The request body format probably changed for an endpoint, so if you see this, open an issue"
+        ),
+        BackendError::TokenInvalid => {
+            notify_popup(
+                siv,
+                "Session Expired",
+                "Your session expired, you need to re-login"
+            );
+            //logout function should be here
+        },
+        BackendError::Deleted => {
+            notify_popup(
+                siv,
+                "Entry doesn't exist",
+                "The entry was probably delete right when you opened it, you should try reloading"
+            )
+            //reload function should be here
+        },
+        BackendError::NoAccess => {
+                notify_popup(
+                    siv,
+                    "FORBIDDEN",
+                    "A request returned a 403: FORBIDDEN, this shouldn't ever happen, so if you see this, open an issue"
+                );
+        }
+    }
+}
+
+fn error_converter(status_code: reqwest::StatusCode) -> BackendError {
     if status_code == StatusCode::UNAUTHORIZED {
         return BackendError::TokenInvalid;
     } else if status_code == StatusCode::NO_CONTENT {
-        return BackendError::BoardDeleted;
+        return BackendError::Deleted;
+    } else if status_code == StatusCode::FORBIDDEN {
+        return BackendError::NoAccess;
+    } else if status_code == StatusCode::INTERNAL_SERVER_ERROR {
+        panic!("haha jakobs fehler lol")
     } else {
         panic!("server returned an unexpected status");
-        return BackendError::NoAccess;
     }
 }
 
@@ -374,22 +475,31 @@ fn get_board_from_id(siv: &mut Cursive, board_id: i64) -> Result<Board, BackendE
     match siv.user_data::<GlobalData>()
         .expect("no user data set")
         .http_client
-        .get(format!("https://backend.yap.dragoncave.dev/boards/{}", board_id))
+        .get(format!("{}/boards/{}", BASE_URL, board_id))
         .header("token", token)
         .send() {
 
-        Ok(response) => if response.status().is_success() && response.status() != StatusCode::NO_CONTENT {
-            return Ok(
-                board_api_to_board(
-                    response.json::<BoardAPI>()
-                        .expect("didn't receive matching json object")
-                )
-            );
-        } else {
-            return Err(error_handler(response.status()))
-        }
-        Err(_) => panic!("request went in error path"),
+        Ok(response) =>
+            if response.status().is_success() && response.status() != StatusCode::NO_CONTENT {
+                return Ok(
+                    board_api_to_board(
+                        response.json::<BoardAPI>()
+                            .expect("didn't receive matching json object")
+                    )
+                );
+            } else {
+                return Err(error_converter(response.status()))
+            }
+        Err(_) => panic!("{}", verbose_panic(error)),
     }
+}
+
+fn verbose_panic(error: reqwest::Error) -> String {
+    return format!(
+        "request errored, the error is: {} and the url: {}",
+        error.to_string(),
+        error.url().unwrap()
+    );
 }
 
 fn get_board_entry_ids(siv: &mut Cursive, board_id: i64) -> Result<vec::Vec<i64>, BackendError> { //board 8
@@ -401,14 +511,14 @@ fn get_board_entry_ids(siv: &mut Cursive, board_id: i64) -> Result<vec::Vec<i64>
     match siv.user_data::<GlobalData>()
         .expect("no user data set")
         .http_client
-        .get(format!("https://backend.yap.dragoncave.dev/boards/{}/entries", board_id))
+        .get(format!("{}/boards/{}/entries", BASE_URL, board_id))
         .header("token", token).send() {
         Ok(response) => if response.status().is_success() {
             return Ok(response.json::<vec::Vec<i64>>().expect("didn't receive json array of i64's"));
         } else {
-            return Err(error_handler(response.status()))
+            return Err(error_converter(response.status()))
         },
-        Err(_) => panic!("request went in error path")
+        Err(error) => panic!("{}", verbose_panic(error)),
     }
 }
 
@@ -421,7 +531,7 @@ fn get_entry_from_id(siv: &mut Cursive, entry_id: i64) -> Result<Entry, BackendE
     match siv.user_data::<GlobalData>()
         .expect("no user data set")
         .http_client
-        .get(format!("https://backend.yap.dragoncave.dev/entry/{}", entry_id))
+        .get(format!("{}/entry/{}", BASE_URL, entry_id))
         .header("token", token)
         .send() {
 
@@ -433,9 +543,9 @@ fn get_entry_from_id(siv: &mut Cursive, entry_id: i64) -> Result<Entry, BackendE
                 )
             );
         } else {
-            return Err(error_handler(response.status()))
+            return Err(error_converter(response.status()))
         }
-        Err(_) => panic!("request went in error path"),
+        Err(_) => panic!("{}", verbose_panic(error)),
     }
 }
 
@@ -448,14 +558,14 @@ fn get_board_ids(siv: &mut Cursive) -> Result<vec::Vec<i64>, BackendError> {
     match siv.user_data::<GlobalData>()
         .expect("no user data set")
         .http_client
-        .get("https://backend.yap.dragoncave.dev/boards/user")
+        .get(format!("{}/boards/user", BASE_URL))
         .header("token", token).send() {
         Ok(response) => if response.status().is_success() {
             return Ok(response.json::<vec::Vec<i64>>().expect("didn't receive json array of i64's"));
         } else {
-            return Err(error_handler(response.status()))
+            return Err(error_converter(response.status()))
         },
-        Err(_) => panic!("request went in error path")
+        Err(_) => panic!("{}", verbose_panic(error)),
     }
 }
 
@@ -534,25 +644,10 @@ fn login(siv: &mut Cursive) {
                 .expect("couldn't find view by name"))
         .get_content();
 
-    //let config_dir = &siv.user_data::<GlobalData>()
-    //    .unwrap()
-    //    .config_home;
-
-    //Get HTTP client if it exists else create one and store it for later use
-    /*let http_client = siv.take_user_data::<GlobalData>().unwrap_or(
-        GlobalData {
-            http_client: blocking::Client::new(),
-            //token: "".to_string(),
-            token: None,
-        }).http_client;*/
-
-
-    //file.unwrap().write_all(password.as_bytes()).unwrap();
-    //let mut filee = File::create(siv.user_data::<GlobalData>().unwrap().config_home.find_data_file(TOKEN_FILE).expect("file not found")).expect("file wasn't created");
-    //let mut file = File::create("reached");
-
     //Send request to backend to obtain a token
-    match siv.user_data::<GlobalData>().expect("no user data set").http_client.post("https://backend.yap.dragoncave.dev/security/token")
+    match siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client.post(format!("{}/security/token", BASE_URL))
         .header("content-type", "application/json")
         .body(format!(
             "{{\"emailAddress\":\"{}\",\"password\":\"{}\"}}",
@@ -731,10 +826,7 @@ fn main_screen(siv: &mut Cursive) {
             )
     );
 
-    siv.add_global_callback(Key::Left, |siv| select_tab(siv, &TABS[0]));
-    siv.add_global_callback(Key::Right, |siv| select_tab(siv, &TABS[1]));
-
-    clear_entry_view(siv);
+    set_tab_nav(siv, true);
 
     set_entry_nav_callback(siv);
 
@@ -875,7 +967,10 @@ fn check_register(siv: &mut Cursive) -> Result<(), RegisterInvalid> {
 }
 
 fn register(siv: &mut Cursive) {
-    match siv.user_data::<GlobalData>().expect("no user data set").http_client.post("https://backend.yap.dragoncave.dev/user")
+    match siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client
+        .post(format!("{}/user", BASE_URL))
         .header("content-type", "application/json")
         .body(format!(
             "{{\"username\":\"{}\",\"emailAddress\":\"{}\",\"password\":\"{}\"}}",
@@ -971,7 +1066,10 @@ fn welcome_page(siv: &mut Cursive) {
 }
 
 fn check_token(siv: &mut Cursive, token: &str) -> bool {
-    if let Ok(response) = siv.user_data::<GlobalData>().expect("no user data set").http_client.get("https://backend.yap.dragoncave.dev/security/token/checkValid")
+    if let Ok(response) = siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client
+        .get(format!("{}/security/token/checkValid", BASE_URL))
         .header("token", token)
         .send() {
         if let Ok(status) = response.text().unwrap().parse::<bool>() {
