@@ -267,7 +267,7 @@ fn create_board(siv: &mut Cursive, name: &str) -> Result<i64, BackendError> {
         } else {
             return Err(error_converter(response.status()));
         },
-        Err(_) => panic!("{}", verbose_panic(error)),
+        Err(error) => panic!("{}", verbose_panic(error)),
     };
 }
 
@@ -490,7 +490,7 @@ fn get_board_from_id(siv: &mut Cursive, board_id: i64) -> Result<Board, BackendE
             } else {
                 return Err(error_converter(response.status()))
             }
-        Err(_) => panic!("{}", verbose_panic(error)),
+        Err(error) => panic!("{}", verbose_panic(error)),
     }
 }
 
@@ -545,7 +545,7 @@ fn get_entry_from_id(siv: &mut Cursive, entry_id: i64) -> Result<Entry, BackendE
         } else {
             return Err(error_converter(response.status()))
         }
-        Err(_) => panic!("{}", verbose_panic(error)),
+        Err(error) => panic!("{}", verbose_panic(error)),
     }
 }
 
@@ -565,7 +565,7 @@ fn get_board_ids(siv: &mut Cursive) -> Result<vec::Vec<i64>, BackendError> {
         } else {
             return Err(error_converter(response.status()))
         },
-        Err(_) => panic!("{}", verbose_panic(error)),
+        Err(error) => panic!("{}", verbose_panic(error)),
     }
 }
 
