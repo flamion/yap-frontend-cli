@@ -405,7 +405,10 @@ fn edit_entry_button_cb(siv: &mut Cursive, entry_id: &i64) {
     let mut entry = get_entry_api_from_edit_view(siv);
     entry.entryID = entry_id.clone();
 
-    modify_entry(siv, entry);
+    match modify_entry(siv, entry.clone()) {
+        Ok(_) => (),
+        Err(_) => notify_popup(siv, "entry not found", "entry wasn't found"),
+    };
 
     match get_entry_from_id(siv, entry_id.clone()) {
         Ok(entry) => match replace_in_entry_view(siv, entry) {
@@ -415,11 +418,14 @@ fn edit_entry_button_cb(siv: &mut Cursive, entry_id: &i64) {
         Err(error) => error_handler(siv, error),
     }
 
-    /*notify_popup(siv, "worked?", format!(
-        "due date: {}, title: {}, description: {}",
-        entry.dueDate, entry.title, entry.description
-    ).as_str());*/
-
+    on_select_entry(
+        siv,
+        &EntryItem::Entry(
+            entry_api_to_entry(
+                entry
+            )
+        )
+    );
     set_callbacks(siv, true);
     siv.pop_layer();
 }
@@ -582,6 +588,7 @@ fn replace_in_entry_view(siv: &mut Cursive, entry: Entry) -> Result<(), ErrorKin
             entry.title.clone(),
             EntryItem::Entry(entry)
         );
+
         return Ok(());
     } else {
         return Err(ErrorKind::NotFound);
@@ -1223,7 +1230,7 @@ fn main_screen(siv: &mut Cursive) {
                                                 ResizedView::with_full_screen(
                                                     Panel::new(
                                                         ScrollView::new(
-                                                            TextView::new("TextText on new line")
+                                                            TextView::new("Select something...")
                                                                 .with_name("ENTRY_DESCRIPTION")
                                                         )
                                                     ).title("Description")
