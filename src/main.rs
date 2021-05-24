@@ -2,14 +2,12 @@ use cursive;
 use cursive::align::HAlign;
 use cursive::{Cursive, View};
 use cursive::event::Key;
+use cursive::utils::span::SpannedString;
 use cursive::theme::ColorStyle;
 use cursive::view::{Nameable, Resizable, SizeConstraint};
-use cursive::views::{
-    Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView,
-    SelectView, ScrollView, ResizedView, Layer, StackView, Panel, Button
-};
+use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView, ScrollView, ResizedView, Layer, StackView, Panel, Button, TextArea};
 use regex::Regex;
-use std::ops::Not;
+use std::ops::{Not, Deref};
 use reqwest::{blocking, Error};
 use reqwest::StatusCode;
 use std::io::Write;
@@ -22,6 +20,11 @@ use serde::Serialize;
 use serde::Deserialize;
 use xdg;
 use chrono;
+use cursive_calendar_view::{CalendarView, EnglishLocale, ViewMode};
+use chrono::{Date, Local, Utc, Timelike};
+use cursive::utils::markup::StyledString;
+use cursive::menu::MenuTree;
+use cursive::event::EventResult;
 //use std::thread;
 //use std::sync::mpsc;
 
@@ -149,18 +152,22 @@ enum TokenLoadError {
 
 
 
-fn set_entry_nav_callback(siv: &mut Cursive) {
-    siv.add_global_callback(
-        Key::Esc,
-        |s| {
-            switch_stack(
-                s,
-                "BOARD_STACK",
-                "BOARD_LAYER"
-            );
-            clear_entry_view(s);
-        }
-    );
+fn set_entry_nav_callback(siv: &mut Cursive, status: bool) {
+    if status {
+        siv.add_global_callback(
+            Key::Esc,
+            |s| {
+                switch_stack(
+                    s,
+                    "BOARD_STACK",
+                    "BOARD_LAYER"
+                );
+                clear_entry_view(s);
+            }
+        );
+    } else {
+        siv.clear_global_callbacks(Key::Esc);
+    }
 }
 
 fn set_tab_nav(siv: &mut Cursive, state: bool) {
@@ -172,6 +179,7 @@ fn set_tab_nav(siv: &mut Cursive, state: bool) {
         siv.clear_global_callbacks(Key::Right);
     }
 }
+
 
 fn select_tab(siv: &mut Cursive, tab_name: &Tab) {
     for tab in &TABS {
@@ -198,7 +206,7 @@ fn select_tab(siv: &mut Cursive, tab_name: &Tab) {
     siv.clear_global_callbacks(Key::Esc);
 
     if tab_name.layer == TABS[0].layer {
-        set_entry_nav_callback(siv);
+        set_entry_nav_callback(siv, true);
     }
 }
 
@@ -326,12 +334,102 @@ fn on_submit_board(siv: &mut Cursive, item: &BoardItem) {
     }
 }
 
+fn create_entry_button_cb(s: &mut Cursive, board_id: &i64) {
+    let title = s.find_name::<EditView>("TITLE")
+        .expect("view: 'TITLE' not found")
+        .get_content()
+        .to_string();
+    let description = s.find_name::<TextArea>("DESCRIPTION")
+        .expect("view: 'DESCRIPTION' not found")
+        .get_content()
+        .to_string();
+
+    let mut hour_view = s.find_name::<SelectView<i8>>("HOURS")
+        .expect("view: 'HOURS' not found");
+
+    let mut minute_view = s.find_name::<SelectView<i8>>("MINUTES")
+        .expect("view: 'MINUTES' not found");
+
+    let hours_id = hour_view.selected_id().expect("no hour selected");
+    let minutes_id = minute_view.selected_id().expect("no minute selected");
+
+    let hours = hour_view.get_item(hours_id).expect("could not get item").1;
+    let minutes = minute_view.get_item(minutes_id).expect("could not get item").1;
+
+    let mut due_date = s.find_name::<SelectView<Date<Local>>>("DATE_BUTTON")
+        .expect("view: 'DATE_BUTTON' not found")
+        .selection()
+        .expect("nothing selected")
+        .and_hms(*hours as u32, *minutes as u32, 1)
+        .timestamp();
+
+    if s.find_name::<Checkbox>("DUE_DATE")
+        .expect("view: 'DUE_DATE' not found")
+        .is_checked()
+        .not() {
+
+        due_date = 0;
+    }
+
+    let entry = EntryAPI {
+        entryID: 0,
+        creatorID: 0,
+        createDate: 0,
+        dueDate: due_date,
+        title: title,
+        description: description,
+    };
+
+    match create_entry(s, entry, &board_id) {
+        Ok(entry_id) => match get_entry_from_id(s, entry_id) {
+            Ok(entry) => load_to_entry_view(s, entry),
+            Err(error) => error_handler(s, error),
+        },
+        Err(error) => error_handler(s, error),
+    }
+
+    set_tab_nav(s, true);
+    set_entry_nav_callback(s, true);
+}
+
+fn create_entry(siv: &mut Cursive, entry: EntryAPI, board_id: &i64) -> Result<i64, BackendError>{
+    let token = &siv.user_data::<GlobalData>().expect("no token")
+        .token
+        .clone()
+        .expect("clone failed");
+
+    match siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client
+        .post(format!("{}/boards/{}/entry", BASE_URL, board_id))
+        .header("token", token)
+        .json::<EntryAPI>(&entry)
+        .send() {
+
+        Ok(response) =>
+            if response.status().is_success() && response.status() != StatusCode::NO_CONTENT {
+                return Ok(
+                        response.json::<i64>()
+                            .expect("didn't receive matching json object")
+                );
+            } else {
+                return Err(error_converter(response.status()))
+            }
+        Err(error) => panic!("{}", verbose_panic(error)),
+    }
+}
+
 fn on_submit_entry(siv: &mut Cursive, item: &EntryItem) {
     match item {
         EntryItem::Entry(entry) => {
-            notify_popup(siv, "edit entry", "edit this entry");
+            notify_popup(siv, "edit entry", format!("{}", entry.due_date.date()).as_str());
         },
-        EntryItem::Add(_) => (),
+        EntryItem::Add(board_id) => {
+            let board_id_c = board_id.clone();
+            edit_entry_popup(siv, "Create entry", ("create", move |s|
+                create_entry_button_cb(s, &board_id_c)
+            ), None);
+        },
     }
 }
 
@@ -500,6 +598,252 @@ fn verbose_panic(error: reqwest::Error) -> String {
         error.to_string(),
         error.url().unwrap()
     );
+}
+
+/*fn ask_date(siv: &mut Cursive, select_name: &str) {
+    siv.add_layer(
+        Dialog::new()
+            .content(
+                CalendarView::<Local, EnglishLocale>::new(
+                    chrono::Date::from(
+                        chrono::offset::Local::today()
+                    )
+                ).view_mode(ViewMode::Month)
+                    .on_submit(|s, v| )
+            )
+    )
+}*/
+
+fn open_calendar(siv: &mut Cursive, item: &Date<Local>, date_button: &str) {
+    siv.add_layer(
+        Dialog::new()
+            .content(
+                CalendarView::<Local, EnglishLocale>::new(item.clone()).view_mode(ViewMode::Month)
+                    .on_submit(|s, v| {
+                        let mut button = s.find_name::<SelectView<Date<Local>>>("DATE_BUTTON")
+                            .expect("view: 'DATE_BUTTON' not found");
+
+                        button.clear();
+
+                        button.add_item(v.format(" %d.%m.%Y ").to_string(), v.clone());
+
+                        s.pop_layer();
+                    })
+            )
+    )
+}
+
+fn edit_entry_popup<F>(siv: &mut Cursive, title: &str, button: (&str, F), entry: Option<Entry>)
+where
+    F: 'static + Fn(&mut Cursive),
+{
+
+    fn change_due_date_state(s: &mut Cursive, state: bool) {
+        let mut date =
+            s.find_name::<SelectView<Date<Local>>>("DATE_BUTTON")
+                .expect("view: 'DATE_BUTTON' not found");
+
+        let mut hours =
+            s.find_name::<SelectView<i8>>("HOURS")
+                .expect("view: 'HOURS' not found");
+
+        let mut minutes =
+            s.find_name::<SelectView<i8>>("MINUTES")
+                .expect("view: 'MINUTES' not found");
+
+        if state {
+            date.enable();
+            hours.enable();
+            minutes.enable();
+        } else {
+            date.disable();
+            hours.disable();
+            minutes.disable();
+        }
+    }
+
+    set_tab_nav(siv, false);
+    set_entry_nav_callback(siv, false);
+
+    let mut time = chrono::DateTime::from(chrono::offset::Local::now());
+    let mut title_entry = "";
+    let mut description = "";
+
+    if let Some(entry_obj) = &entry {
+        time = entry_obj.due_date;
+        title_entry = &entry_obj.title;
+        description = &entry_obj.description;
+    }
+
+    let hours_view: SelectView<i8> = SelectView::new()
+        .autojump()
+        .popup();
+
+    let mut c: i8 = -1;
+    let hour_items = vec![(0, 0); 24].into_iter().map(|pair| {
+        c += 1;
+        return (format!("{:02}", c as i8), c);
+    });
+
+    let minutes_view: SelectView<i8> = SelectView::new()
+        .autojump()
+        .popup();
+
+    let mut c = -5;
+    let minute_items = vec![(0, 0); 12].into_iter().map(|pair| {
+        c += 5;
+        return (format!("{:02}", c as i8), c);
+    });
+
+    siv.add_layer(
+        Dialog::new()
+        .content(
+            LinearLayout::vertical()
+                .child(
+                    TextView::new("\nTitle")
+                        .fixed_height(2)
+                )
+                .child(
+                    EditView::new()
+                        .content(title_entry)
+                        .with_name("TITLE")
+                )
+                .child(
+                    TextView::new("\nDescription")
+                        .fixed_height(2)
+                )
+                .child(
+                    TextArea::new()
+                        .content(description)
+                        .with_name("DESCRIPTION")
+                        .fixed_height(5)
+                )
+                .child(
+                    LinearLayout::horizontal()
+                        .child(
+                            PaddedView::lrtb(0, 2, 1, 1,
+                                 LinearLayout::vertical()
+                                     .child(
+                                         TextView::new("Date")
+                                     )
+                                     .child(
+                                         SelectView::new()
+                                             .item(
+                                                 time.date().format(" %d.%m.%Y ")
+                                                     .to_string(),
+                                                 time.date()
+                                             )
+                                             .on_submit(
+                                                 |s, i|
+                                                     open_calendar(
+                                                         s,
+                                                         i,
+                                                         "DATE_BUTTON"
+                                                     )
+                                             )
+                                             .disabled()
+                                             .with_name("DATE_BUTTON")
+                                     )
+                            )
+                        )
+                        .child(
+                            PaddedView::lrtb(2, 0, 1, 1,
+                                LinearLayout::vertical()
+                                    .child(
+                                        TextView::new("Time")
+                                    )
+                                    .child(
+                                        LinearLayout::horizontal()
+                                            .child(
+                                                hours_view.with_all(
+                                                    hour_items.into_iter()
+                                                ).disabled()
+                                                    .with_name("HOURS")
+                                            )
+                                            .child(
+                                                TextView::new( ":")
+                                            )
+                                            .child(
+                                                minutes_view.with_all(
+                                                    minute_items.into_iter()
+                                                ).disabled()
+                                                    .with_name("MINUTES")
+                                            )
+                                    )
+                            )
+                        )
+                )
+                .child(
+                    LinearLayout::horizontal()
+                        .child(
+                            Checkbox::new()
+                                .on_change(change_due_date_state)
+                                .with_name("DUE_DATE")
+                        )
+                        .child(
+                            TextView::new(" with due date")
+                        )
+                )
+        )
+        .title(title)
+        .button(
+            "cancel",
+            |s| {
+                set_tab_nav(s, true);
+                set_entry_nav_callback(s, true);
+                s.pop_layer();
+            }
+        )
+        .button(button.0,  button.1)
+    );
+
+    if let Some(entry) = &entry {
+        if (entry.due_date.timestamp() == 0).not() {
+            siv.find_name::<Checkbox>("DUE_DATE")
+                .expect("view: 'DUE_DATE' not found")
+                .set_checked(true);
+
+            change_due_date_state(siv, true);
+        }
+    }
+
+    let mut hour_view = siv.find_name::<SelectView<i8>>("HOURS")
+        .expect("view: 'HOURS' not found");
+
+    let mut minute_view = siv.find_name::<SelectView<i8>>("MINUTES")
+        .expect("view: 'MINUTES' not found");
+
+    if let Some(entry_obj) = &entry {
+        //update time view
+        let hour = time.hour() as i8;
+        let minute = (((time.minute() + 5) / 5 - 1) as i8) * 5;
+
+        let hour_position = hour_view.iter()
+            .position(|item| item.1 == &hour)
+            .expect("iteration find failed");
+
+        let minute_position = minute_view.iter()
+            .position(|item| item.1 == &minute)
+            .expect("iteration find failed");
+
+        hour_view.set_selection(hour_position);
+        minute_view.set_selection(minute_position);
+    }
+
+    //move to the button closure
+    /*{
+        //update time
+        let hours_id = hour_view.selected_id().expect("no hour selected");
+        let minutes_id = minute_view.selected_id().expect("no minute selected");
+
+        let hours = hour_view.get_item(hours_id).expect("could not get item").1;
+        let minutes = minute_view.get_item(minutes_id).expect("could not get item").1;
+
+        time = time.with_hour(hours as u32)
+            .expect("out of range")
+            .with_minute(minutes as u32)
+            .expect("out of range");
+    }*/
 }
 
 fn get_board_entry_ids(siv: &mut Cursive, board_id: i64) -> Result<vec::Vec<i64>, BackendError> { //board 8
@@ -828,9 +1172,11 @@ fn main_screen(siv: &mut Cursive) {
 
     set_tab_nav(siv, true);
 
-    set_entry_nav_callback(siv);
+    set_entry_nav_callback(siv, true);
 
     load_boards_to_view(siv);
+
+    //edit_entry_popup(siv, "Create new entry");
 }
 
 fn register_page(siv: &mut Cursive) {

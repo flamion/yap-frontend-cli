@@ -141,6 +141,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cursive_calendar_view"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48f477f4663234fb8e8d4b1909ebd91c8f8e1319bc6e7593cc0ee8ab0d902397"
+dependencies = [
+ "chrono",
+ "cursive_core",
+]
+
+[[package]]
 name = "cursive_core"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1401,6 +1411,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "cursive",
+ "cursive_calendar_view",
  "openssl",
  "regex",
  "reqwest",
