@@ -10,7 +10,7 @@ use regex::Regex;
 use std::ops::Not;
 use reqwest::blocking;
 use reqwest::StatusCode;
-use std::io::Write;
+use std::io::{Write, ErrorKind};
 use std::fs;
 use std::vec;
 use std::fs::{File, OpenOptions};
@@ -35,7 +35,7 @@ use chrono::{Date, Local, Timelike};
 static TOKEN_FILE: &'static str = "token.json";
 static BASE_URL: &'static str = "https://backend.yap.dragoncave.dev";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[allow(non_snake_case)]
 struct BoardAPI {
     boardID: i64,
@@ -44,7 +44,7 @@ struct BoardAPI {
     creatorID: i64, //UserID
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[allow(non_snake_case)]
 struct UserAPI {
     userID: i64,
@@ -54,7 +54,7 @@ struct UserAPI {
     emailAddress: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[allow(non_snake_case)]
 struct EntryAPI {
     entryID: i64,
@@ -65,6 +65,7 @@ struct EntryAPI {
     description: String,
 }
 
+#[derive(Debug, Clone)]
 struct Board {
     board_id: i64,
     name: String,
@@ -72,6 +73,7 @@ struct Board {
     creator_id: i64,
 }
 
+#[derive(Debug, Clone)]
 struct User {
     user_id: i64,
     name: String,
@@ -80,6 +82,7 @@ struct User {
     email_address: String,
 }
 
+#[derive(Debug, Clone)]
 struct Entry {
     entry_id: i64,
     creator_id: i64,
@@ -175,6 +178,11 @@ fn set_tab_nav(siv: &mut Cursive, state: bool) {
         siv.clear_global_callbacks(Key::Left);
         siv.clear_global_callbacks(Key::Right);
     }
+}
+
+fn set_callbacks(siv: &mut Cursive, state: bool) {
+    set_entry_nav_callback(siv, state);
+    set_tab_nav(siv, state)
 }
 
 
@@ -331,20 +339,20 @@ fn on_submit_board(siv: &mut Cursive, item: &BoardItem) {
     }
 }
 
-fn create_entry_button_cb(s: &mut Cursive, board_id: &i64) {
-    let title = s.find_name::<EditView>("TITLE")
+fn get_entry_api_from_edit_view(siv: &mut Cursive) -> EntryAPI {
+    let title = siv.find_name::<EditView>("TITLE")
         .expect("view: 'TITLE' not found")
         .get_content()
         .to_string();
-    let description = s.find_name::<TextArea>("DESCRIPTION")
+    let description = siv.find_name::<TextArea>("DESCRIPTION")
         .expect("view: 'DESCRIPTION' not found")
         .get_content()
         .to_string();
 
-    let hour_view = s.find_name::<SelectView<i8>>("HOURS")
+    let hour_view = siv.find_name::<SelectView<i8>>("HOURS")
         .expect("view: 'HOURS' not found");
 
-    let minute_view = s.find_name::<SelectView<i8>>("MINUTES")
+    let minute_view = siv.find_name::<SelectView<i8>>("MINUTES")
         .expect("view: 'MINUTES' not found");
 
     let hours_id = hour_view.selected_id().expect("no hour selected");
@@ -353,14 +361,14 @@ fn create_entry_button_cb(s: &mut Cursive, board_id: &i64) {
     let hours = hour_view.get_item(hours_id).expect("could not get item").1;
     let minutes = minute_view.get_item(minutes_id).expect("could not get item").1;
 
-    let mut due_date = s.find_name::<SelectView<Date<Local>>>("DATE_BUTTON")
+    let mut due_date = siv.find_name::<SelectView<Date<Local>>>("DATE_BUTTON")
         .expect("view: 'DATE_BUTTON' not found")
         .selection()
         .expect("nothing selected")
         .and_hms(*hours as u32, *minutes as u32, 1)
         .timestamp();
 
-    if s.find_name::<Checkbox>("DUE_DATE")
+    if siv.find_name::<Checkbox>("DUE_DATE")
         .expect("view: 'DUE_DATE' not found")
         .is_checked()
         .not() {
@@ -368,7 +376,7 @@ fn create_entry_button_cb(s: &mut Cursive, board_id: &i64) {
         due_date = 0;
     }
 
-    let entry = EntryAPI {
+    return EntryAPI {
         entryID: 0,
         creatorID: 0,
         createDate: 0,
@@ -376,17 +384,76 @@ fn create_entry_button_cb(s: &mut Cursive, board_id: &i64) {
         title: title,
         description: description,
     };
+}
 
-    match create_entry(s, entry, &board_id) {
-        Ok(entry_id) => match get_entry_from_id(s, entry_id) {
-            Ok(entry) => load_to_entry_view(s, entry),
-            Err(error) => error_handler(s, error),
+fn create_entry_button_cb(siv: &mut Cursive, board_id: &i64) {
+    let entry = get_entry_api_from_edit_view(siv);
+
+    match create_entry(siv, entry, &board_id) {
+        Ok(entry_id) => match get_entry_from_id(siv, entry_id) {
+            Ok(entry) => load_to_entry_view(siv, entry),
+            Err(error) => error_handler(siv, error),
         },
-        Err(error) => error_handler(s, error),
+        Err(error) => error_handler(siv, error),
     }
 
-    set_tab_nav(s, true);
-    set_entry_nav_callback(s, true);
+    siv.pop_layer();
+    set_callbacks(siv, true);
+}
+
+fn edit_entry_button_cb(siv: &mut Cursive, entry_id: &i64) {
+    let mut entry = get_entry_api_from_edit_view(siv);
+    entry.entryID = entry_id.clone();
+
+    match modify_entry(siv, entry.clone()) {
+        Ok(_) => (),
+        Err(_) => notify_popup(siv, "entry not found", "entry wasn't found"),
+    };
+
+    match get_entry_from_id(siv, entry_id.clone()) {
+        Ok(entry) => match replace_in_entry_view(siv, entry) {
+            Err(ErrorKind::NotFound) => notify_popup(siv, "not found", "entry not found"),
+            _ => (),
+        },
+        Err(error) => error_handler(siv, error),
+    }
+
+    on_select_entry(
+        siv,
+        &EntryItem::Entry(
+            entry_api_to_entry(
+                entry
+            )
+        )
+    );
+    set_callbacks(siv, true);
+    siv.pop_layer();
+}
+
+fn modify_entry(siv: &mut Cursive, entry: EntryAPI) -> Result<(), BackendError> {
+    let entry_id = entry.entryID;
+
+    let token = &siv.user_data::<GlobalData>().expect("no token")
+        .token
+        .clone()
+        .expect("clone failed");
+
+    match siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client
+        .put(format!("{}/entry/{}", BASE_URL, entry_id))
+        .header("token", token)
+        .json::<EntryAPI>(&entry)
+        .send() {
+
+        Ok(response) =>
+            if response.status().is_success() && response.status() != StatusCode::NO_CONTENT {
+                return Ok(());
+            } else {
+                return Err(error_converter(response.status()))
+            }
+        Err(error) => panic!("{}", verbose_panic(error)),
+    }
 }
 
 fn create_entry(siv: &mut Cursive, entry: EntryAPI, board_id: &i64) -> Result<i64, BackendError>{
@@ -419,7 +486,10 @@ fn create_entry(siv: &mut Cursive, entry: EntryAPI, board_id: &i64) -> Result<i6
 fn on_submit_entry(siv: &mut Cursive, item: &EntryItem) {
     match item {
         EntryItem::Entry(entry) => {
-            notify_popup(siv, "edit entry", format!("{}", entry.due_date.date()).as_str());
+            let entry_id = entry.entry_id.clone();
+            edit_entry_popup(siv, "Edit entry", ("save", move |s|
+                edit_entry_button_cb(s, &entry_id)
+            ), Some(&entry.clone()))
         },
         EntryItem::Add(board_id) => {
             let board_id_c = board_id.clone();
@@ -498,6 +568,33 @@ fn load_to_entry_view(siv: &mut Cursive, entry: Entry) {
         .insert_item(0, entry.title.clone(), EntryItem::Entry(entry));
 }
 
+fn replace_in_entry_view(siv: &mut Cursive, entry: Entry) -> Result<(), ErrorKind> {
+    let mut entry_view = siv.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
+        .expect("view: 'ENTRY_SELECTION' not found");
+
+    let entry_id = entry.entry_id;
+
+    let entry_index = entry_view.iter().position(|item| {
+        match item.1 {
+            EntryItem::Entry(entry) => entry.entry_id == entry_id,
+            _ => false,
+        }
+    });
+
+    if let Some(index) = entry_index {
+        entry_view.remove_item(index);
+        entry_view.insert_item(
+            index,
+            entry.title.clone(),
+            EntryItem::Entry(entry)
+        );
+
+        return Ok(());
+    } else {
+        return Err(ErrorKind::NotFound);
+    }
+}
+
 fn switch_stack(siv: &mut Cursive, stack_name: &str, layer_name: &str) {
     let mut stack = siv.find_name::<StackView>(stack_name) // = "BOARD_STACK"
         .expect("view not found");
@@ -556,6 +653,8 @@ fn error_converter(status_code: reqwest::StatusCode) -> BackendError {
         return BackendError::NoAccess;
     } else if status_code == StatusCode::INTERNAL_SERVER_ERROR {
         panic!("haha jakobs fehler lol")
+    } else if status_code == StatusCode::BAD_REQUEST {
+        panic!("made a bad request")
     } else {
         panic!("server returned an unexpected status");
     }
@@ -630,7 +729,7 @@ fn open_calendar(siv: &mut Cursive, item: &Date<Local>, date_button: String) {
     )
 }
 
-fn edit_entry_popup<F>(siv: &mut Cursive, title: &str, button: (&str, F), entry: Option<Entry>)
+fn edit_entry_popup<F>(siv: &mut Cursive, title: &str, button: (&str, F), entry: Option<&Entry>)
 where
     F: 'static + Fn(&mut Cursive),
 {
@@ -659,14 +758,13 @@ where
         }
     }
 
-    set_tab_nav(siv, false);
-    set_entry_nav_callback(siv, false);
+    set_callbacks(siv, false);
 
     let mut time = chrono::DateTime::from(chrono::offset::Local::now());
     let mut title_entry = "";
     let mut description = "";
 
-    if let Some(entry_obj) = &entry {
+    if let Some(entry_obj) = entry {
         time = entry_obj.due_date;
         title_entry = &entry_obj.title;
         description = &entry_obj.description;
@@ -786,15 +884,14 @@ where
         .button(
             "cancel",
             |s| {
-                set_tab_nav(s, true);
-                set_entry_nav_callback(s, true);
+                set_callbacks(s, true);
                 s.pop_layer();
             }
         )
         .button(button.0,  button.1)
     );
 
-    if let Some(entry) = &entry {
+    if let Some(entry) = entry {
         if (entry.due_date.timestamp() == 0).not() {
             siv.find_name::<Checkbox>("DUE_DATE")
                 .expect("view: 'DUE_DATE' not found")
@@ -810,7 +907,7 @@ where
     let mut minute_view = siv.find_name::<SelectView<i8>>("MINUTES")
         .expect("view: 'MINUTES' not found");
 
-    if let Some(_) = &entry {
+    if let Some(_) = entry {
         //update time view
         let hour = time.hour() as i8;
         let minute = (((time.minute() + 5) / 5 - 1) as i8) * 5;
@@ -1133,7 +1230,7 @@ fn main_screen(siv: &mut Cursive) {
                                                 ResizedView::with_full_screen(
                                                     Panel::new(
                                                         ScrollView::new(
-                                                            TextView::new("TextText on new line")
+                                                            TextView::new("Select something...")
                                                                 .with_name("ENTRY_DESCRIPTION")
                                                         )
                                                     ).title("Description")
@@ -1167,9 +1264,7 @@ fn main_screen(siv: &mut Cursive) {
             )
     );
 
-    set_tab_nav(siv, true);
-
-    set_entry_nav_callback(siv, true);
+    set_callbacks(siv, true);
 
     load_boards_to_view(siv);
 
