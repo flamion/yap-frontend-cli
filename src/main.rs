@@ -1,14 +1,14 @@
 use cursive;
 use cursive::align::HAlign;
-use cursive::{Cursive, View};
+use cursive::Cursive;
 use cursive::event::Key;
-use cursive::utils::span::SpannedString;
 use cursive::theme::ColorStyle;
 use cursive::view::{Nameable, Resizable, SizeConstraint};
-use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView, ScrollView, ResizedView, Layer, StackView, Panel, Button, TextArea};
+use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView,
+                     ScrollView, ResizedView, Layer, StackView, Panel, TextArea};
 use regex::Regex;
-use std::ops::{Not, Deref};
-use reqwest::{blocking, Error};
+use std::ops::Not;
+use reqwest::blocking;
 use reqwest::StatusCode;
 use std::io::Write;
 use std::fs;
@@ -21,10 +21,7 @@ use serde::Deserialize;
 use xdg;
 use chrono;
 use cursive_calendar_view::{CalendarView, EnglishLocale, ViewMode};
-use chrono::{Date, Local, Utc, Timelike};
-use cursive::utils::markup::StyledString;
-use cursive::menu::MenuTree;
-use cursive::event::EventResult;
+use chrono::{Date, Local, Timelike};
 //use std::thread;
 //use std::sync::mpsc;
 
@@ -344,10 +341,10 @@ fn create_entry_button_cb(s: &mut Cursive, board_id: &i64) {
         .get_content()
         .to_string();
 
-    let mut hour_view = s.find_name::<SelectView<i8>>("HOURS")
+    let hour_view = s.find_name::<SelectView<i8>>("HOURS")
         .expect("view: 'HOURS' not found");
 
-    let mut minute_view = s.find_name::<SelectView<i8>>("MINUTES")
+    let minute_view = s.find_name::<SelectView<i8>>("MINUTES")
         .expect("view: 'MINUTES' not found");
 
     let hours_id = hour_view.selected_id().expect("no hour selected");
@@ -614,14 +611,14 @@ fn verbose_panic(error: reqwest::Error) -> String {
     )
 }*/
 
-fn open_calendar(siv: &mut Cursive, item: &Date<Local>, date_button: &str) {
+fn open_calendar(siv: &mut Cursive, item: &Date<Local>, date_button: String) {
     siv.add_layer(
         Dialog::new()
             .content(
                 CalendarView::<Local, EnglishLocale>::new(item.clone()).view_mode(ViewMode::Month)
-                    .on_submit(|s, v| {
-                        let mut button = s.find_name::<SelectView<Date<Local>>>("DATE_BUTTON")
-                            .expect("view: 'DATE_BUTTON' not found");
+                    .on_submit(move |s, v| {
+                        let mut button = s.find_name::<SelectView<Date<Local>>>(date_button.as_str())
+                            .expect(format!("view: '{}' not found", date_button).as_str());
 
                         button.clear();
 
@@ -680,7 +677,7 @@ where
         .popup();
 
     let mut c: i8 = -1;
-    let hour_items = vec![(0, 0); 24].into_iter().map(|pair| {
+    let hour_items = vec![(0, 0); 24].into_iter().map(|_| {
         c += 1;
         return (format!("{:02}", c as i8), c);
     });
@@ -690,7 +687,7 @@ where
         .popup();
 
     let mut c = -5;
-    let minute_items = vec![(0, 0); 12].into_iter().map(|pair| {
+    let minute_items = vec![(0, 0); 12].into_iter().map(|_| {
         c += 5;
         return (format!("{:02}", c as i8), c);
     });
@@ -738,7 +735,7 @@ where
                                                      open_calendar(
                                                          s,
                                                          i,
-                                                         "DATE_BUTTON"
+                                                         String::from("DATE_BUTTON")
                                                      )
                                              )
                                              .disabled()
@@ -813,7 +810,7 @@ where
     let mut minute_view = siv.find_name::<SelectView<i8>>("MINUTES")
         .expect("view: 'MINUTES' not found");
 
-    if let Some(entry_obj) = &entry {
+    if let Some(_) = &entry {
         //update time view
         let hour = time.hour() as i8;
         let minute = (((time.minute() + 5) / 5 - 1) as i8) * 5;
