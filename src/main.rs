@@ -4,8 +4,7 @@ use cursive::Cursive;
 use cursive::event::Key;
 use cursive::theme::ColorStyle;
 use cursive::view::{Nameable, Resizable, SizeConstraint};
-use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView,
-                     ScrollView, ResizedView, Layer, StackView, Panel, TextArea};
+use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView, ScrollView, ResizedView, Layer, StackView, Panel, TextArea, Button};
 use regex::Regex;
 use std::ops::Not;
 use reqwest::blocking;
@@ -365,8 +364,8 @@ fn get_entry_api_from_edit_view(siv: &mut Cursive) -> EntryAPI {
         .expect("view: 'DATE_BUTTON' not found")
         .selection()
         .expect("nothing selected")
-        .and_hms(*hours as u32, *minutes as u32, 1)
-        .timestamp();
+        .and_hms_milli(*hours as u32, *minutes as u32, 0, 1)
+        .timestamp_millis();
 
     if siv.find_name::<Checkbox>("DUE_DATE")
         .expect("view: 'DUE_DATE' not found")
@@ -506,11 +505,50 @@ fn on_select_entry(siv: &mut Cursive, item: &EntryItem) {
             siv.find_name::<TextView>("ENTRY_DESCRIPTION")
                 .expect("view: 'ENTRY_DESCRIPTION' not found")
                 .set_content(entry.description.clone());
+
+            siv.find_name::<Button>("ENTRY_EDIT_BUTTON")
+                .expect("view: 'BOARD_EDIT_BUTTON' not found")
+                .enable();
+
+            siv.find_name::<Button>("ENTRY_DELETE_BUTTON")
+                .expect("view: 'BOARD_DELETE_BUTTON' not found")
+                .enable();
         },
         EntryItem::Add(_) => {
             siv.find_name::<TextView>("ENTRY_DESCRIPTION")
                 .expect("view: 'ENTRY_DESCRIPTION' not found")
                 .set_content("With this button you are able to create new entries.");
+
+            siv.find_name::<Button>("ENTRY_EDIT_BUTTON")
+                .expect("view: 'BOARD_EDIT_BUTTON' not found")
+                .disable();
+
+            siv.find_name::<Button>("ENTRY_DELETE_BUTTON")
+                .expect("view: 'BOARD_DELETE_BUTTON' not found")
+                .disable();
+        },
+    }
+}
+
+fn on_select_board(siv: &mut Cursive, item: &BoardItem) {
+    match item {
+        BoardItem::Board(_) => {
+            siv.find_name::<Button>("BOARD_EDIT_BUTTON")
+                .expect("view: 'BOARD_EDIT_BUTTON' not found")
+                .enable();
+
+            siv.find_name::<Button>("BOARD_DELETE_BUTTON")
+                .expect("view: 'BOARD_DELETE_BUTTON' not found")
+                .enable();
+        },
+        BoardItem::Add => {
+            siv.find_name::<Button>("BOARD_EDIT_BUTTON")
+                .expect("view: 'BOARD_EDIT_BUTTON' not found")
+                .disable();
+
+            siv.find_name::<Button>("BOARD_DELETE_BUTTON")
+                .expect("view: 'BOARD_DELETE_BUTTON' not found")
+                .disable();
         },
     }
 }
@@ -522,7 +560,7 @@ fn entry_api_to_entry(entry_api: EntryAPI) -> Entry {
         create_date: chrono::DateTime::from(
             chrono::DateTime::<chrono::Utc>::from_utc(
                 chrono::NaiveDateTime::from_timestamp(
-                    entry_api.createDate, 0
+                    entry_api.createDate / 1000, 0
                 ),
                 chrono::Utc
             )
@@ -530,7 +568,7 @@ fn entry_api_to_entry(entry_api: EntryAPI) -> Entry {
         due_date: chrono::DateTime::from(
             chrono::DateTime::<chrono::Utc>::from_utc(
                 chrono::NaiveDateTime::from_timestamp(
-                    entry_api.dueDate, 0
+                    entry_api.dueDate / 1000, 0
                 ),
                 chrono::Utc
             )
@@ -547,7 +585,7 @@ fn board_api_to_board(board_api: BoardAPI) -> Board {
         create_date: chrono::DateTime::from(
             chrono::DateTime::<chrono::Utc>::from_utc(
                 chrono::NaiveDateTime::from_timestamp(
-                    board_api.createDate, 0
+                    board_api.createDate / 1000, 0
                 ),
                 chrono::Utc
             )
@@ -760,14 +798,16 @@ where
 
     set_callbacks(siv, false);
 
-    let mut time = chrono::DateTime::from(chrono::offset::Local::now());
+    let mut time = chrono::Local::now();
     let mut title_entry = "";
     let mut description = "";
 
     if let Some(entry_obj) = entry {
-        time = entry_obj.due_date;
-        title_entry = &entry_obj.title;
-        description = &entry_obj.description;
+        if entry_obj.due_date.timestamp_millis() != 0 {
+            time = entry_obj.due_date;
+            title_entry = &entry_obj.title;
+            description = &entry_obj.description;
+        }
     }
 
     let hours_view: SelectView<i8> = SelectView::new()
@@ -892,7 +932,7 @@ where
     );
 
     if let Some(entry) = entry {
-        if (entry.due_date.timestamp() == 0).not() {
+        if (entry.due_date.timestamp_millis() == 0).not() {
             siv.find_name::<Checkbox>("DUE_DATE")
                 .expect("view: 'DUE_DATE' not found")
                 .set_checked(true);
@@ -907,37 +947,23 @@ where
     let mut minute_view = siv.find_name::<SelectView<i8>>("MINUTES")
         .expect("view: 'MINUTES' not found");
 
-    if let Some(_) = entry {
-        //update time view
-        let hour = time.hour() as i8;
-        let minute = (((time.minute() + 5) / 5 - 1) as i8) * 5;
-
-        let hour_position = hour_view.iter()
-            .position(|item| item.1 == &hour)
-            .expect("iteration find failed");
-
-        let minute_position = minute_view.iter()
-            .position(|item| item.1 == &minute)
-            .expect("iteration find failed");
-
-        hour_view.set_selection(hour_position);
-        minute_view.set_selection(minute_position);
+    if let Some(_) = entry {} else {
+        time = chrono::Local::now();
     }
 
-    //move to the button closure
-    /*{
-        //update time
-        let hours_id = hour_view.selected_id().expect("no hour selected");
-        let minutes_id = minute_view.selected_id().expect("no minute selected");
+    let hour = time.hour() as i8;
+    let minute = (((time.minute() + 5) / 5 - 1) as i8) * 5;
 
-        let hours = hour_view.get_item(hours_id).expect("could not get item").1;
-        let minutes = minute_view.get_item(minutes_id).expect("could not get item").1;
+    let hour_position = hour_view.iter()
+        .position(|item| item.1 == &hour)
+        .expect("iteration find failed");
 
-        time = time.with_hour(hours as u32)
-            .expect("out of range")
-            .with_minute(minutes as u32)
-            .expect("out of range");
-    }*/
+    let minute_position = minute_view.iter()
+        .position(|item| item.1 == &minute)
+        .expect("iteration find failed");
+
+    hour_view.set_selection(hour_position);
+    minute_view.set_selection(minute_position);
 }
 
 fn get_board_entry_ids(siv: &mut Cursive, board_id: i64) -> Result<vec::Vec<i64>, BackendError> { //board 8
@@ -1195,50 +1221,88 @@ fn main_screen(siv: &mut Cursive) {
                 )
             )
             .child(
-                LinearLayout::vertical()
-                    .child(
+                StackView::new()
+                    .fullscreen_layer(
+                        ResizedView::with_full_screen(
+                            LinearLayout::vertical()
+                                .child(
+                                    TextView::new("Password")
+                                )
+                                .child(
+                                    EditView::new()
+                                )
+                        ).with_name(TABS[1].layer)
+                    )
+                    .fullscreen_layer(
                         StackView::new()
                             .fullscreen_layer(
-                                ResizedView::with_full_screen(
-                                    LinearLayout::vertical()
+                                LinearLayout::vertical()
+                                    .child(
+                                    LinearLayout::horizontal()
                                         .child(
-                                            TextView::new("Password")
-                                        )
-                                        .child(
-                                            EditView::new()
-                                        )
-                                ).with_name(TABS[1].layer)
-                            )
-                            .fullscreen_layer(
-                                StackView::new()
-                                    .fullscreen_layer(
-                                        LinearLayout::horizontal()
-                                            .child(
-                                                ResizedView::with_full_screen(
-                                                    ScrollView::new(
-                                                        ResizedView::with_full_screen(
-                                                            SelectView::new()
-                                                                .autojump()
-                                                                .on_submit(on_submit_entry)
-                                                                .on_select(on_select_entry)
-                                                                .with_name("ENTRY_SELECTION")
-                                                        )
+                                            ResizedView::with_full_screen(
+                                                ScrollView::new(
+                                                    ResizedView::with_full_screen(
+                                                        SelectView::new()
+                                                            .autojump()
+                                                            .on_submit(on_submit_entry)
+                                                            .on_select(on_select_entry)
+                                                            .with_name("ENTRY_SELECTION")
                                                     )
                                                 )
                                             )
-                                            .child(
-                                                ResizedView::with_full_screen(
-                                                    Panel::new(
-                                                        ScrollView::new(
-                                                            TextView::new("Select something...")
-                                                                .with_name("ENTRY_DESCRIPTION")
-                                                        )
-                                                    ).title("Description")
-                                                        .title_position(HAlign::Center)
-                                                )
-                                            ).with_name("ENTRY_LAYER")
+                                        )
+                                        .child(
+                                            ResizedView::with_full_screen(
+                                                Panel::new(
+                                                    ScrollView::new(
+                                                        TextView::new("Select something...")
+                                                            .with_name("ENTRY_DESCRIPTION")
+                                                    )
+                                                ).title("Description")
+                                                    .title_position(HAlign::Center)
+                                            )
+                                        ).with_name("ENTRY_LAYER")
                                     )
-                                    .fullscreen_layer(
+                                    .child(
+                                        ResizedView::new(
+                                            SizeConstraint::Full,
+                                            SizeConstraint::Fixed(1),
+                                            LinearLayout::horizontal()
+                                                .child(
+                                                    ResizedView::with_full_screen(
+                                                        Button::new("edit", |s| {
+                                                            let view =
+                                                                s.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
+                                                                    .expect("view: 'ENTRY_SELECTION' not found");
+
+                                                            let selected_id = view
+                                                                .selected_id()
+                                                                .expect("nothing selected");
+
+                                                            on_submit_entry(
+                                                                s,
+                                                                view.get_item(selected_id)
+                                                                .expect("selected item not found").1
+                                                            )
+                                                        })
+                                                            .disabled()
+                                                            .with_name("ENTRY_EDIT_BUTTON")
+                                                    )
+                                                )
+                                                .child(
+                                                    ResizedView::with_full_screen(
+                                                        Button::new("delete", |s| {})
+                                                            .disabled()
+                                                            .with_name("ENTRY_DELETE_BUTTON")
+                                                    )
+                                                )
+                                        )
+                                    )
+                            )
+                            .fullscreen_layer(
+                                LinearLayout::vertical()
+                                    .child(
                                         ResizedView::with_full_screen(
                                             ScrollView::new(
                                                 ResizedView::with_full_screen(
@@ -1246,29 +1310,41 @@ fn main_screen(siv: &mut Cursive) {
                                                         .autojump()
                                                         .item("<add new board>", BoardItem::Add)
                                                         .on_submit(on_submit_board)
+                                                        .on_select(on_select_board)
                                                         .with_name("BOARD_SELECTION")
                                                 )
                                             ).with_name(TABS[0].layer)
                                         ).with_name("BOARD_LAYER")
-                                    ).with_name("BOARD_STACK")
-                            ).with_name("TAB_LAYERS")
-
-                    )
-                    /*.child(
-                        ResizedView::new(
-                            SizeConstraint::Full,
-                            SizeConstraint::Fixed(1),
-                            Button::new("reload", reload_all)
-                        )
-                    )*/
+                                    )
+                                    .child(
+                                        ResizedView::new(
+                                            SizeConstraint::Full,
+                                            SizeConstraint::Fixed(1),
+                                            LinearLayout::horizontal()
+                                                .child(
+                                                    ResizedView::with_full_screen(
+                                                        Button::new("edit", |s| {})
+                                                            .disabled()
+                                                            .with_name("BOARD_EDIT_BUTTON")
+                                                    )
+                                                )
+                                                .child(
+                                                    ResizedView::with_full_screen(
+                                                        Button::new("delete", |s| {})
+                                                            .disabled()
+                                                            .with_name("BOARD_DELETE_BUTTON")
+                                                    )
+                                                )
+                                        )
+                                    )
+                            ).with_name("BOARD_STACK")
+                    ).with_name("TAB_LAYERS")
             )
     );
 
     set_callbacks(siv, true);
 
     load_boards_to_view(siv);
-
-    //edit_entry_popup(siv, "Create new entry");
 }
 
 fn register_page(siv: &mut Cursive) {
@@ -1562,25 +1638,12 @@ fn main() {
         siv.load_theme_file(file).unwrap();
     }
 
-    //siv.user_data::<GlobalData>().unwrap().config_home.place_data_file(TOKEN_FILE).expect("token file not placed");
-    //siv.with_user_data(|data: &mut GlobalData| data.config_home.place_data_file(TOKEN_FILE).expect("couldn't place token file"));
-
     //display the welcome page
     //TODO integrate this mess into the login function, which should by then use the credentials as parameters
     if let Ok(token_comb) = load_token(&mut siv) {
         siv.add_layer(Dialog::text(
             format!("Is {} you?", token_comb.user_mail))
             .button("yes", move |mut siv| {
-
-                //let http_client = blocking::Client::new();
-
-                /*siv.set_user_data(
-                    GlobalData {
-                        token: Some(token_comb.token.clone()),
-                        http_client,
-
-                    }
-                );*/
 
                 siv.with_user_data(|data: &mut GlobalData| {
                     data.token = Some(token_comb.token.clone());
