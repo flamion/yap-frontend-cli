@@ -4,7 +4,7 @@ use cursive::Cursive;
 use cursive::event::Key;
 use cursive::theme::ColorStyle;
 use cursive::view::{Nameable, Resizable, SizeConstraint};
-use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView, ScrollView, ResizedView, Layer, StackView, Panel, TextArea, Button};
+use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView, ScrollView, ResizedView, Layer, StackView, Panel, TextArea, Button, ListView};
 use regex::Regex;
 use std::ops::Not;
 use reqwest::blocking;
@@ -1189,6 +1189,55 @@ fn login(siv: &mut Cursive) {
     }
 }
 
+fn edit_board_popup(siv: &mut Cursive) {
+    siv.add_layer(
+        Dialog::new()
+            .content(
+                LinearLayout::horizontal()
+                    .child(
+                        PaddedView::lrtb(0, 1, 1, 0,
+                            LinearLayout::vertical()
+                                .child(
+                                    TextView::new("Name")
+                                )
+                                .child(
+                                    EditView::new()
+                                )
+                                .child(
+                                    TextView::new("\nAdd user")
+                                        .fixed_width(25)
+                                        .fixed_height(2)
+                                )
+                                .child(
+                                    EditView::new()
+                                )
+                                .child(
+                                    Button::new("add user", |s| {})
+                                )
+                        )
+                    )
+                    .child(
+                        PaddedView::lrtb(0, 0, 1, 0,
+                            LinearLayout::vertical()
+                                .child(
+                                    TextView::new("  Users")
+                                )
+                                .child(
+                                    ScrollView::new(
+                                        SelectView::new()
+                                            .item("* flamion", ())
+                                            .item("  FlareFlo", ())
+                                            .item("  zUnixorn", ())
+                                    )
+                                )
+                        )
+                    )
+            )
+            .button("cancel", |s| {})
+            .button("confirm", |s| {})
+            .title("Edit board")
+    );
+}
 
 fn main_screen(siv: &mut Cursive) {
     siv.pop_layer();
@@ -1345,6 +1394,8 @@ fn main_screen(siv: &mut Cursive) {
     set_callbacks(siv, true);
 
     load_boards_to_view(siv);
+
+    //edit_board_popup(siv);
 }
 
 fn register_page(siv: &mut Cursive) {
