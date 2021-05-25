@@ -365,8 +365,8 @@ fn get_entry_api_from_edit_view(siv: &mut Cursive) -> EntryAPI {
         .expect("view: 'DATE_BUTTON' not found")
         .selection()
         .expect("nothing selected")
-        .and_hms(*hours as u32, *minutes as u32, 1)
-        .timestamp();
+        .and_hms_milli(*hours as u32, *minutes as u32, 0, 1)
+        .timestamp_millis();
 
     if siv.find_name::<Checkbox>("DUE_DATE")
         .expect("view: 'DUE_DATE' not found")
@@ -522,7 +522,7 @@ fn entry_api_to_entry(entry_api: EntryAPI) -> Entry {
         create_date: chrono::DateTime::from(
             chrono::DateTime::<chrono::Utc>::from_utc(
                 chrono::NaiveDateTime::from_timestamp(
-                    entry_api.createDate, 0
+                    (entry_api.createDate / 1000) as i64, 0
                 ),
                 chrono::Utc
             )
@@ -530,7 +530,7 @@ fn entry_api_to_entry(entry_api: EntryAPI) -> Entry {
         due_date: chrono::DateTime::from(
             chrono::DateTime::<chrono::Utc>::from_utc(
                 chrono::NaiveDateTime::from_timestamp(
-                    entry_api.dueDate, 0
+                    (entry_api.dueDate / 1000), 0
                 ),
                 chrono::Utc
             )
@@ -547,7 +547,7 @@ fn board_api_to_board(board_api: BoardAPI) -> Board {
         create_date: chrono::DateTime::from(
             chrono::DateTime::<chrono::Utc>::from_utc(
                 chrono::NaiveDateTime::from_timestamp(
-                    board_api.createDate, 0
+                    (board_api.createDate / 1000), 0
                 ),
                 chrono::Utc
             )
@@ -892,7 +892,7 @@ where
     );
 
     if let Some(entry) = entry {
-        if (entry.due_date.timestamp() == 0).not() {
+        if (entry.due_date.timestamp_millis() == 0).not() {
             siv.find_name::<Checkbox>("DUE_DATE")
                 .expect("view: 'DUE_DATE' not found")
                 .set_checked(true);
