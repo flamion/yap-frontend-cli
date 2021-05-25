@@ -760,14 +760,16 @@ where
 
     set_callbacks(siv, false);
 
-    let mut time = chrono::DateTime::from(chrono::offset::Local::now());
+    let mut time = chrono::Local::now();
     let mut title_entry = "";
     let mut description = "";
 
     if let Some(entry_obj) = entry {
-        time = entry_obj.due_date;
-        title_entry = &entry_obj.title;
-        description = &entry_obj.description;
+        if entry_obj.due_date.timestamp_millis() != 0 {
+            time = entry_obj.due_date;
+            title_entry = &entry_obj.title;
+            description = &entry_obj.description;
+        }
     }
 
     let hours_view: SelectView<i8> = SelectView::new()
@@ -907,22 +909,23 @@ where
     let mut minute_view = siv.find_name::<SelectView<i8>>("MINUTES")
         .expect("view: 'MINUTES' not found");
 
-    if let Some(_) = entry {
-        //update time view
-        let hour = time.hour() as i8;
-        let minute = (((time.minute() + 5) / 5 - 1) as i8) * 5;
-
-        let hour_position = hour_view.iter()
-            .position(|item| item.1 == &hour)
-            .expect("iteration find failed");
-
-        let minute_position = minute_view.iter()
-            .position(|item| item.1 == &minute)
-            .expect("iteration find failed");
-
-        hour_view.set_selection(hour_position);
-        minute_view.set_selection(minute_position);
+    if let Some(_) = entry {} else {
+        time = chrono::Local::now();
     }
+
+    let hour = time.hour() as i8;
+    let minute = ((((time.minute() + 5) / 5 - 1) as f32).round() as i8) * 5;
+
+    let hour_position = hour_view.iter()
+        .position(|item| item.1 == &hour)
+        .expect("iteration find failed");
+
+    let minute_position = minute_view.iter()
+        .position(|item| item.1 == &minute)
+        .expect("iteration find failed");
+
+    hour_view.set_selection(hour_position);
+    minute_view.set_selection(minute_position);
 
     //move to the button closure
     /*{
