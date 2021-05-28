@@ -4,9 +4,10 @@ use cursive::Cursive;
 use cursive::event::Key;
 use cursive::theme::ColorStyle;
 use cursive::view::{Nameable, Resizable, SizeConstraint};
-use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView, ScrollView, ResizedView, Layer, StackView, Panel, TextArea, Button};
+use cursive::views::{Dialog, EditView, LinearLayout, TextView, Checkbox, PaddedView, SelectView,
+                     ScrollView, ResizedView, Layer, StackView, Panel, TextArea, Button};
 use regex::Regex;
-use std::ops::Not;
+use std::ops::{Not, Deref};
 use reqwest::blocking;
 use reqwest::StatusCode;
 use std::io::{Write, ErrorKind};
@@ -21,6 +22,7 @@ use xdg;
 use chrono;
 use cursive_calendar_view::{CalendarView, EnglishLocale, ViewMode};
 use chrono::{Date, Local, Timelike};
+use cursive_aligned_view;
 //use std::thread;
 //use std::sync::mpsc;
 
@@ -41,6 +43,7 @@ struct BoardAPI {
     name: String,
     createDate: i64,
     creatorID: i64, //UserID
+    members: vec::Vec<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -70,6 +73,7 @@ struct Board {
     name: String,
     create_date: chrono::DateTime<chrono::offset::Local>,
     creator_id: i64,
+    members: vec::Vec<i64>
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +153,10 @@ enum TokenLoadError {
     FileNotReadable,
 }
 
+enum UserItem {
+    Member(User),
+    Admin(User),
+}
 
 
 fn set_entry_nav_callback(siv: &mut Cursive, status: bool) {
@@ -162,6 +170,7 @@ fn set_entry_nav_callback(siv: &mut Cursive, status: bool) {
                     "BOARD_LAYER"
                 );
                 clear_entry_view(s);
+                set_board_edit_button(s, true);
             }
         );
     } else {
@@ -176,6 +185,24 @@ fn set_tab_nav(siv: &mut Cursive, state: bool) {
     } else {
         siv.clear_global_callbacks(Key::Left);
         siv.clear_global_callbacks(Key::Right);
+    }
+}
+
+fn set_entry_edit_button(siv: &mut Cursive, state: bool) {
+    if state {
+        siv.clear_global_callbacks('e');
+        siv.add_global_callback('e', on_click_entry_edit);
+    } else {
+        siv.clear_global_callbacks('e');
+    }
+}
+
+fn set_board_edit_button(siv: &mut Cursive, state: bool) {
+    if state {
+        siv.clear_global_callbacks('e');
+        siv.add_global_callback('e', on_click_board_edit);
+    } else {
+        siv.clear_global_callbacks('e');
     }
 }
 
@@ -269,7 +296,8 @@ fn create_board(siv: &mut Cursive, name: &str) -> Result<i64, BackendError> {
             boardID: 0,
             name: name.to_string(),
             createDate: 0,
-            creatorID: 0
+            creatorID: 0,
+            members: vec![]
         })
         .send() {
 
@@ -284,6 +312,7 @@ fn create_board(siv: &mut Cursive, name: &str) -> Result<i64, BackendError> {
 }
 
 fn on_submit_board(siv: &mut Cursive, item: &BoardItem) {
+    set_entry_edit_button(siv, true);
     match item {
         BoardItem::Board(board) => {
             load_entries_to_view(siv, board.board_id);
@@ -398,6 +427,7 @@ fn create_entry_button_cb(siv: &mut Cursive, board_id: &i64) {
 
     siv.pop_layer();
     set_callbacks(siv, true);
+    set_entry_edit_button(siv, true);
 }
 
 fn edit_entry_button_cb(siv: &mut Cursive, entry_id: &i64) {
@@ -426,6 +456,7 @@ fn edit_entry_button_cb(siv: &mut Cursive, entry_id: &i64) {
         )
     );
     set_callbacks(siv, true);
+    set_entry_edit_button(siv, true);
     siv.pop_layer();
 }
 
@@ -591,6 +622,7 @@ fn board_api_to_board(board_api: BoardAPI) -> Board {
             )
         ),
         creator_id: board_api.creatorID,
+        members: board_api.members,
     };
 }
 
@@ -694,7 +726,7 @@ fn error_converter(status_code: reqwest::StatusCode) -> BackendError {
     } else if status_code == StatusCode::BAD_REQUEST {
         panic!("made a bad request")
     } else {
-        panic!("server returned an unexpected status");
+        panic!("server returned an unexpected status: {}", status_code.as_str());
     }
 }
 
@@ -797,6 +829,8 @@ where
     }
 
     set_callbacks(siv, false);
+    set_entry_edit_button(siv, false);
+    set_board_edit_button(siv, false);
 
     let mut time = chrono::Local::now();
     let mut title_entry = "";
@@ -925,6 +959,7 @@ where
             "cancel",
             |s| {
                 set_callbacks(s, true);
+                set_entry_edit_button(s, true);
                 s.pop_layer();
             }
         )
@@ -1031,6 +1066,107 @@ fn get_board_ids(siv: &mut Cursive) -> Result<vec::Vec<i64>, BackendError> {
         },
         Err(error) => panic!("{}", verbose_panic(error)),
     }
+}
+
+fn on_click_board_edit(siv: &mut Cursive) {
+
+    match siv.find_name::<SelectView<BoardItem>>("BOARD_SELECTION")
+        .expect("view: 'BOARD_SELECTION' not found")
+        .selection()
+        .expect("nothing selected on 'BOARD_SELECTION'")
+        .deref() {
+
+        BoardItem::Board(board) => edit_board_popup(siv, &board),
+        _ => notify_popup(siv, "no board", "no board selected"),
+    }
+}
+
+fn on_click_delete_board(siv:  &mut Cursive) {
+    let mut view = siv.find_name::<SelectView<BoardItem>>("BOARD_SELECTION")
+        .expect("view: 'BOARD_SELECTION' not found");
+
+    match view.selection()
+        .expect("nothing selected on 'BOARD_SELECTION'")
+        .deref() {
+
+        BoardItem::Board(board) => {
+            match delete_board(siv, board) {
+                Err(error) => error_handler(siv, error),
+                _ => {},
+            };
+            match view.selected_id() {
+                Some(id) => { view.remove_item(id); },
+                None => notify_popup(siv, "reload", "please reload the app"),
+            }
+        },
+        _ => notify_popup(siv, "no board", "no board selected"),
+    }
+}
+
+fn on_click_delete_entry(siv:  &mut Cursive) {
+    let mut view = siv.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
+        .expect("view: 'ENTRY_SELECTION' not found");
+
+    match view.selection()
+        .expect("nothing selected on 'ENTRY_SELECTION'")
+        .deref() {
+
+        EntryItem::Entry(entry) => {
+            match delete_entry(siv, entry) {
+                Err(error) => error_handler(siv, error),
+                _ => {},
+            };
+            match view.selected_id() {
+                Some(id) => { view.remove_item(id); },
+                None => notify_popup(siv, "reload", "please reload the app"),
+            }
+        },
+        _ => notify_popup(siv, "no entry", "no entry selected"),
+    }
+}
+
+fn delete_board(siv:  &mut Cursive, board: &Board) -> Result<(), BackendError> {
+    let token = &siv.user_data::<GlobalData>().expect("no token")
+        .token
+        .clone()
+        .expect("clone failed");
+
+    match siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client
+        .delete(format!("{}/boards/{}", BASE_URL, board.board_id))
+        .header("token", token).send() {
+        Ok(response) => if response.status().is_success() {
+            return Ok(());
+        } else {
+            return Err(error_converter(response.status()))
+        },
+        Err(error) => panic!("{}", verbose_panic(error)),
+    }
+}
+
+fn delete_entry(siv:  &mut Cursive, entry: &Entry) -> Result<(), BackendError> {
+    let token = &siv.user_data::<GlobalData>().expect("no token")
+        .token
+        .clone()
+        .expect("clone failed");
+
+    match siv.user_data::<GlobalData>()
+        .expect("no user data set")
+        .http_client
+        .delete(format!("{}/entry/{}", BASE_URL, entry.entry_id))
+        .header("token", token).send() {
+        Ok(response) => if response.status().is_success() {
+            return Ok(());
+        } else {
+            return Err(error_converter(response.status()))
+        },
+        Err(error) => panic!("{}", verbose_panic(error)),
+    }
+}
+
+fn on_submit_user(siv: &mut Cursive, item: &UserItem) {
+
 }
 
 fn exit(siv: &mut Cursive) {
@@ -1189,6 +1325,102 @@ fn login(siv: &mut Cursive) {
     }
 }
 
+/*fn get_users_from_board(siv: &mut Cursive, board: &Board) -> Result<vec::Vec<User>, BackendError> {
+    let token = &siv.user_data::<GlobalData>().expect("no token")
+        .token
+        .clone()
+        .expect("clone failed");
+
+    for user_id in board.members {
+        match siv.user_data::<GlobalData>()
+            .expect("no user data set")
+            .http_client
+            .get(format!("{}/user", BASE_URL))
+            .header("token", token).send() {
+            Ok(response) => if response.status().is_success() {
+                return Ok(response.json::<vec::Vec<i64>>().expect("didn't receive json array of i64's"));
+            } else {
+                return Err(error_converter(response.status()))
+            },
+            Err(error) => panic!("{}", verbose_panic(error)),
+        }
+    }
+}*/
+
+fn edit_board_popup(siv: &mut Cursive, board: &Board) {
+    //get_users_from_board(siv, board);
+
+    siv.add_layer(
+        Dialog::new()
+            .content(
+                LinearLayout::horizontal()
+                    .child(
+                        PaddedView::lrtb(0, 1, 1, 0,
+                            LinearLayout::vertical()
+                                .child(
+                                    TextView::new("Name")
+                                )
+                                .child(
+                                    EditView::new()
+                                        .content(board.name.clone())
+                                )
+                                .child(
+                                    TextView::new("\nAdd user")
+                                        .fixed_width(25)
+                                        .fixed_height(2)
+                                )
+                                .child(
+                                    EditView::new()
+                                )
+                                .child(
+                                    Button::new("add user", |s| {})
+                                )
+                        )
+                    )
+                    .child(
+                        PaddedView::lrtb(0, 0, 1, 0,
+                            LinearLayout::vertical()
+                                .child(
+                                    TextView::new("  Users")
+                                )
+                                .child(
+                                    ResizedView::with_max_height(
+                                        8,
+                                        ScrollView::new(
+                                            SelectView::new()
+                                                .item("* flamion", ())
+                                                .item("  FlareFlo", ())
+                                                .item("  zUnixorn", ())
+                                        )
+                                    )
+                                )
+                        )
+                    )
+            )
+            .button("cancel", |s| { s.pop_layer(); set_board_edit_button(s, true); })
+            .button("confirm", |s| {})
+            .title("Edit board")
+    );
+    set_board_edit_button(siv, false);
+}
+
+fn on_click_entry_edit(siv: &mut Cursive) {
+    {
+        let view =
+            siv.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
+                .expect("view: 'ENTRY_SELECTION' not found");
+
+        let selected_id = view
+            .selected_id()
+            .expect("nothing selected");
+
+        on_submit_entry(
+            siv,
+            view.get_item(selected_id)
+                .expect("selected item not found").1
+        )
+    }
+}
 
 fn main_screen(siv: &mut Cursive) {
     siv.pop_layer();
@@ -1224,14 +1456,75 @@ fn main_screen(siv: &mut Cursive) {
                 StackView::new()
                     .fullscreen_layer(
                         ResizedView::with_full_screen(
-                            LinearLayout::vertical()
-                                .child(
-                                    TextView::new("Password")
+                            cursive_aligned_view::AlignedView::with_center(
+                                ResizedView::new(
+                                    SizeConstraint::Fixed(24),
+                                    SizeConstraint::Fixed(19),
+                                    LinearLayout::vertical()
+                                        .child(
+                                            TextView::new("Username")
+                                        )
+                                        .child(
+                                            EditView::new()
+                                                .with_name("USERNAME_EDIT")
+                                        )
+                                        .child(
+                                            TextView::new("\nEmail")
+                                                .fixed_height(2)
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\n")
+                                        )
+                                        .child(
+                                            cursive_aligned_view::AlignedView::with_center_left(
+                                                Button::new("Save", |s| {})
+                                            )
+                                        )
+                                        .child(
+                                            TextView::new("\n")
+                                        )
+                                        .child(
+                                            TextView::new("Old password")
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\n\nNew password")
+                                                .fixed_height(3)
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\nRe-Type password")
+                                                .fixed_height(2)
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\n")
+                                        )
+                                        .child(
+                                        LinearLayout::horizontal()
+                                            .child(
+                                                cursive_aligned_view::AlignedView::with_center_left(
+                                                    Button::new("Save", |s| {})
+                                                )
+                                            )
+                                            .child(
+                                                cursive_aligned_view::AlignedView::with_center_right(
+                                                    Button::new("Logout", |s| {})
+                                                )
+                                            )
+                                        )
                                 )
-                                .child(
-                                    EditView::new()
-                                )
-                        ).with_name(TABS[1].layer)
+                            ).with_name(TABS[1].layer)
+                        )
                     )
                     .fullscreen_layer(
                         StackView::new()
@@ -1271,28 +1564,14 @@ fn main_screen(siv: &mut Cursive) {
                                             LinearLayout::horizontal()
                                                 .child(
                                                     ResizedView::with_full_screen(
-                                                        Button::new("edit", |s| {
-                                                            let view =
-                                                                s.find_name::<SelectView<EntryItem>>("ENTRY_SELECTION")
-                                                                    .expect("view: 'ENTRY_SELECTION' not found");
-
-                                                            let selected_id = view
-                                                                .selected_id()
-                                                                .expect("nothing selected");
-
-                                                            on_submit_entry(
-                                                                s,
-                                                                view.get_item(selected_id)
-                                                                .expect("selected item not found").1
-                                                            )
-                                                        })
+                                                        Button::new("edit", on_click_entry_edit)
                                                             .disabled()
                                                             .with_name("ENTRY_EDIT_BUTTON")
                                                     )
                                                 )
                                                 .child(
                                                     ResizedView::with_full_screen(
-                                                        Button::new("delete", |s| {})
+                                                        Button::new("delete", on_click_delete_entry)
                                                             .disabled()
                                                             .with_name("ENTRY_DELETE_BUTTON")
                                                     )
@@ -1323,14 +1602,14 @@ fn main_screen(siv: &mut Cursive) {
                                             LinearLayout::horizontal()
                                                 .child(
                                                     ResizedView::with_full_screen(
-                                                        Button::new("edit", |s| {})
+                                                        Button::new("edit", on_click_board_edit)
                                                             .disabled()
                                                             .with_name("BOARD_EDIT_BUTTON")
                                                     )
                                                 )
                                                 .child(
                                                     ResizedView::with_full_screen(
-                                                        Button::new("delete", |s| {})
+                                                        Button::new("delete", on_click_delete_board)
                                                             .disabled()
                                                             .with_name("BOARD_DELETE_BUTTON")
                                                     )
@@ -1343,6 +1622,7 @@ fn main_screen(siv: &mut Cursive) {
     );
 
     set_callbacks(siv, true);
+    set_board_edit_button(siv, true);
 
     load_boards_to_view(siv);
 }
