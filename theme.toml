@@ -2,4 +2,35 @@ shadow = false
 borders = "simple"
 
 [colors]
+#Background: used to color the application background (around views). Defaults to blue.
 background = "black"
+
+#Shadow: used to color shadow around views. Defaults to black.
+shadow = "black"
+
+#View: used to color the background for views. Defaults to white.
+view = ["#1c1c1c", "silver"]
+
+#Primary: used to print primary text. Defaults to black.
+primary = "white"
+
+#Secondary: used to print secondary text. Defaults to blue.
+secondary = ["#5f5f5f", "silver"]
+
+#Tertiary: used to print tertiary text. Defaults to white.
+tertiary = "grey"
+
+#TitlePrimary: used to print primary titles. Defaults to red.
+title_primary = ["#53e3a6", "Aqua"]
+
+#TitleSecondary: used to print secondary titles. Defaults to yellow.
+title_secondary = ["#559e7f", "Teal"]
+
+#Highlight: used to highlight selected items. Defaults to red.
+highlight = ["#53e3a6", "Aqua"]
+
+#HighlightInactive: used to highlight selected but inactive items. Defaults to blue.
+highlight_inactive = ["#559e7f", "Teal"]
+
+#HighlightText: used to print primary text when highlighted Defaults to white.
+highlight_text = ["#1c1c1c", "silver"]

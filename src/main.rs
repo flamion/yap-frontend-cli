@@ -22,6 +22,7 @@ use xdg;
 use chrono;
 use cursive_calendar_view::{CalendarView, EnglishLocale, ViewMode};
 use chrono::{Date, Local, Timelike};
+use cursive_aligned_view;
 //use std::thread;
 //use std::sync::mpsc;
 
@@ -1455,14 +1456,75 @@ fn main_screen(siv: &mut Cursive) {
                 StackView::new()
                     .fullscreen_layer(
                         ResizedView::with_full_screen(
-                            LinearLayout::vertical()
-                                .child(
-                                    TextView::new("Password")
+                            cursive_aligned_view::AlignedView::with_center(
+                                ResizedView::new(
+                                    SizeConstraint::Fixed(24),
+                                    SizeConstraint::Fixed(19),
+                                    LinearLayout::vertical()
+                                        .child(
+                                            TextView::new("Username")
+                                        )
+                                        .child(
+                                            EditView::new()
+                                                .with_name("USERNAME_EDIT")
+                                        )
+                                        .child(
+                                            TextView::new("\nEmail")
+                                                .fixed_height(2)
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\n")
+                                        )
+                                        .child(
+                                            cursive_aligned_view::AlignedView::with_center_left(
+                                                Button::new("Save", |s| {})
+                                            )
+                                        )
+                                        .child(
+                                            TextView::new("\n")
+                                        )
+                                        .child(
+                                            TextView::new("Old password")
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\n\nNew password")
+                                                .fixed_height(3)
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\nRe-Type password")
+                                                .fixed_height(2)
+                                        )
+                                        .child(
+                                            EditView::new()
+                                        )
+                                        .child(
+                                            TextView::new("\n")
+                                        )
+                                        .child(
+                                        LinearLayout::horizontal()
+                                            .child(
+                                                cursive_aligned_view::AlignedView::with_center_left(
+                                                    Button::new("Save", |s| {})
+                                                )
+                                            )
+                                            .child(
+                                                cursive_aligned_view::AlignedView::with_center_right(
+                                                    Button::new("Logout", |s| {})
+                                                )
+                                            )
+                                        )
                                 )
-                                .child(
-                                    EditView::new()
-                                )
-                        ).with_name(TABS[1].layer)
+                            ).with_name(TABS[1].layer)
+                        )
                     )
                     .fullscreen_layer(
                         StackView::new()
