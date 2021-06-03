@@ -839,9 +839,9 @@ where
     if let Some(entry_obj) = entry {
         if entry_obj.due_date.timestamp_millis() != 0 {
             time = entry_obj.due_date;
-            title_entry = &entry_obj.title;
-            description = &entry_obj.description;
         }
+        title_entry = &entry_obj.title;
+        description = &entry_obj.description;
     }
 
     let hours_view: SelectView<i8> = SelectView::new()
